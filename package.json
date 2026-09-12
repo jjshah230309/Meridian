@@ -1,0 +1,25 @@
+{
+  "name": "meridian-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Meridian ERP \u2014 self-contained multi-tenant cloud ERP & business management platform",
+  "type": "module",
+  "main": "src/server.mjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "scripts": {
+    "start": "node src/server.mjs",
+    "desktop": "node src/server.mjs --app",
+    "dev": "node src/server.mjs --dev",
+    "server": "node src/server.mjs --server",
+    "seed": "node src/server.mjs --seed --exit",
+    "reset": "node src/server.mjs --reset --seed --exit",
+    "test": "node --test test/",
+    "package": "node scripts/package.mjs",
+    "service": "node scripts/service.mjs",
+    "backup": "node scripts/backup.mjs"
+  }
+}

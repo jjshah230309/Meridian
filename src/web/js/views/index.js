@@ -1,0 +1,48 @@
+// Meridian ERP :: web/views/index
+// Route table. Views are loaded on demand so the first paint after sign-in
+// only pays for the dashboard.
+const lazy = (path, fn) => async (...a) => (await import(path))[fn](...a);
+
+export const routes = [
+  { match: (r) => r.path === '/' || r.path === '', render: lazy('./dashboard.js', 'dashboardView') },
+  { match: (r) => r.parts[0] === 'list' && r.parts.length >= 2, render: lazy('./list.js', 'listView') },
+  { match: (r) => r.parts[0] === 'record' && r.parts.length >= 3, render: lazy('./record.js', 'recordView') },
+  { match: (r) => r.parts[0] === 'new' && r.parts.length >= 2, render: lazy('./record.js', 'newRecordView') },
+  { match: (r) => r.parts[0] === 'txn' && r.parts.length === 2, render: lazy('./txn.js', 'txnView') },
+  { match: (r) => r.parts[0] === 'txn-new', render: lazy('./txn.js', 'txnEditor') },
+  { match: (r) => r.parts[0] === 'txn-edit', render: lazy('./txn.js', 'txnEditor') },
+  { match: (r) => r.parts[0] === 'journal' && r.parts.length === 2, render: lazy('./journal.js', 'journalView') },
+  { match: (r) => r.parts[0] === 'journal-new', render: lazy('./journal.js', 'journalEditor') },
+  { match: (r) => r.path === '/chart', render: lazy('./chart.js', 'chartView') },
+  { match: (r) => r.parts[0] === 'account' && r.parts.length === 2, render: lazy('./chart.js', 'ledgerView') },
+  { match: (r) => r.path === '/periods', render: lazy('./chart.js', 'periodsView') },
+  { match: (r) => r.parts[0] === 'reports', render: lazy('./reports.js', 'reportsView') },
+  { match: (r) => r.path === '/pipeline', render: lazy('./crm.js', 'pipelineView') },
+  { match: (r) => r.path === '/forecast', render: lazy('./crm.js', 'forecastView') },
+  { match: (r) => r.path === '/inventory', render: lazy('./inventory.js', 'inventoryView') },
+  { match: (r) => r.parts[0] === 'hr', render: lazy('./hr.js', 'hrView') },
+  { match: (r) => r.parts[0] === 'bank', render: lazy('./bank.js', 'bankView') },
+  { match: (r) => r.parts[0] === 'setup', render: lazy('./setup.js', 'setupView') },
+  { match: (r) => r.parts[0] === 'data', render: lazy('./data.js', 'dataView') },
+  { match: (r) => r.parts[0] === 'revenue', render: lazy('./revenue.js', 'revenueView') },
+  { match: (r) => r.parts[0] === 'recurring', render: lazy('./recurring.js', 'recurringView') },
+  { match: (r) => r.parts[0] === 'revaluation', render: lazy('./revaluation.js', 'revaluationView') },
+  { match: (r) => r.parts[0] === 'collections', render: lazy('./collections.js', 'collectionsView') },
+  { match: (r) => r.parts[0] === 'paybills', render: lazy('./payruns.js', 'payrunsView') },
+  { match: (r) => r.parts[0] === 'tax', render: lazy('./tax.js', 'taxView') },
+  { match: (r) => r.parts[0] === 'allocations', render: lazy('./allocations.js', 'allocationsView') },
+  { match: (r) => r.parts[0] === 'subscriptions', render: lazy('./subscriptions.js', 'subscriptionsView') },
+  { match: (r) => r.parts[0] === 'intercompany', render: lazy('./intercompany.js', 'intercompanyView') },
+  { match: (r) => r.parts[0] === 'custom-records', render: lazy('./customrecords.js', 'customRecordsView') },
+  { match: (r) => r.parts[0] === 'assets', render: lazy('./assets.js', 'assetsView') },
+  { match: (r) => r.parts[0] === 'books', render: lazy('./books.js', 'booksView') },
+  { match: (r) => r.parts[0] === 'settings', render: lazy('./settings.js', 'settingsView') },
+  { match: (r) => r.parts[0] === 'help', render: lazy('./help.js', 'helpView') },
+  { match: (r) => r.parts[0] === 'learn', render: lazy('./learn.js', 'learnView') },
+  { match: (r) => r.path === '/projects', render: lazy('./projects.js', 'projectsView') },
+  { match: (r) => r.path === '/production', render: lazy('./manufacturing.js', 'productionView') },
+  { match: (r) => r.path === '/warehouse', render: lazy('./manufacturing.js', 'warehouseView') },
+  { match: (r) => r.path === '/dispatch', render: lazy('./service.js', 'dispatchView') },
+  // Fallback
+  { match: () => true, render: lazy('./dashboard.js', 'notFoundView') },
+];

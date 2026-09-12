@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "meridian",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/server.mjs", "--no-open", "--dev"],
+      "port": 8422
+    }
+  ]
+}

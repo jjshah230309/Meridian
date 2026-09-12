@@ -1,0 +1,17 @@
+The typefaces in this directory are distributed under the
+SIL Open Font License, Version 1.1.
+
+  IBM Plex Sans, IBM Plex Mono, IBM Plex Serif  (c) IBM Corp.
+  Source Sans 3                                 (c) Adobe
+  JetBrains Mono                                (c) JetBrains s.r.o.
+  Inter                                         (c) The Inter Project Authors
+
+The full licence text is available at https://openfontlicense.org and is
+reproduced in each project's own repository. In summary, the OFL permits the
+fonts to be used, studied, modified and redistributed freely, including
+bundled inside an application such as this one, provided they are not sold by
+themselves and any modified version is not released under the reserved font
+names above.
+
+These files are unmodified subsets (Latin and Latin Extended) of the released
+versions, produced by the Google Fonts service.

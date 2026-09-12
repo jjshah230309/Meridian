@@ -1,0 +1,11 @@
+# Build output — rebuilt with: node scripts/package.mjs
+dist/
+
+# The live company database, its backups, and the server secret that signs
+# session cookies. None of this is source, and the secret must never leave
+# this machine.
+data/
+
+*.log
+node_modules/
+.DS_Store
