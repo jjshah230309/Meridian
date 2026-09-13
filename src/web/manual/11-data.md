@@ -12,12 +12,16 @@ backup**. Use the backup command.
 
 ## Importing
 
-**Import & Export → Import** takes CSV, TSV or JSON for any record type.
+**Import & Export → Import** takes CSV, TSV or Excel (`.xlsx`) for any record
+type — a spreadsheet is read on the server, not in the browser, so nothing
+about the file format changes what happens next.
 
-1. Paste or upload the file. Meridian shows the first rows.
+1. Choose the file. For a workbook with more than one tab, pick which sheet —
+   Meridian shows the first rows either way.
 2. It proposes a **column mapping** by matching your headings against field
    names, labels and the aliases accounting exports actually use — so
-   `Customer ID`, `Account Number` and `Code` all find `entity_no`.
+   `Customer ID`, `Account Number` and `Code` all find `entity_no`, and
+   `Item Name` finds `name` on an item.
 3. **Validate.** Every row is checked against the same rules the interface
    uses: required fields, references that must exist, numbers that must parse.
    You get a list of problems by row and column.
@@ -27,6 +31,45 @@ backup**. Use the backup command.
 
 Every import is recorded as a job. If it turns out to be wrong, **reverse** it
 and everything it created goes away.
+
+### Bringing everything over at once
+
+Moving off an old system rarely means one file. It means a workbook per year,
+or one workbook with a tab per list — customers, items, the chart of accounts,
+every invoice since the company started. **Import & Export → Import → Bring
+everything over at once** is built for that.
+
+Add every file, or one workbook with several tabs — each tab counts as its own
+entry here, the same as a separate file would. For each one Meridian guesses
+what it is from its columns and, where the sheet or file name helps, from that
+too: a tab called *Vendor Bills* is a stronger hint than any column ever is,
+but a plain "Customers.csv" with a Name and Email column is recognisable on
+its own. The guess is a starting point, shown with the columns it matched —
+change it if it is wrong, or open **Review columns** to fix one mapping by
+hand without losing your place in the rest of the batch.
+
+**Check** validates every included sheet at once and shows, per sheet, how
+many rows are ready and how many need attention — the same report the
+one-file screen shows, just one per sheet rather than one per screen.
+**Import everything that is ready** then commits each sheet that checked out.
+Reference data goes in before the things that point at it — accounts before
+customers before invoices — so a sheet of invoices finds the customers a
+sheet earlier in the same batch just created. You do not choose that order;
+it is worked out from what each record type actually depends on.
+
+A sheet with a mix of good and bad rows still imports its good rows and
+reports the rest as skipped, exactly like the one-file screen's own commit
+button. A sheet that fails outright — the wrong record type chosen, say —
+does not touch any other sheet in the batch: each one lands as its own job in
+**History**, reversible on its own, whether the batch around it succeeded or
+not.
+
+**What this does not read.** The older Excel format (`.xls`, from Excel
+97–2003) is not a spreadsheet Meridian can open directly — it is a different,
+much older binary format under the hood, not the zip-based one `.xlsx` is.
+Open it in Excel, Numbers or LibreOffice and use *Save As → Excel Workbook
+(.xlsx)* first. Everything from Excel 2007 onward is already in the format
+this reads.
 
 ### Bank statements
 

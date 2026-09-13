@@ -14,17 +14,82 @@ import { ulid, Money, Qty, nowIso, today, isValidDate, sum } from '../core/util.
 import { ValidationError, notFound, unprocessable, badRequest } from '../core/http.mjs';
 import { nextNumber } from '../core/seq.mjs';
 import { parseCsv, toCsv } from '../core/csv.mjs';
-import { buildXlsx, currencyFormatFor } from '../core/xlsx.mjs';
+import { buildXlsx, readXlsx, currencyFormatFor } from '../core/xlsx.mjs';
+import { ZipFormatError } from '../core/zip.mjs';
 import { buildReportPdf, PAGE } from '../core/pdf.mjs';
 import * as meta from './meta.mjs';
 import * as records from './records.mjs';
+import { TYPES as TXN_TYPES } from './txn.mjs';
 import * as audit from '../core/audit.mjs';
 
 export const FORMATS = ['csv', 'xlsx', 'json', 'pdf'];
 export const MODES = ['add', 'update', 'upsert'];
 
+/**
+ * Business order, not alphabetical: reference data other records point to,
+ * then the parties and things a transaction is about, then the transactions
+ * themselves, then the postings that reference *those*. A batch import runs
+ * in this order so that "customer" exists before "invoice" tries to look one
+ * up -- an ordering concern only, entirely separate from per-row validation.
+ * Anything not listed runs after everything listed, in the order it arrived.
+ */
+export const IMPORT_ORDER = [
+  'subsidiary', 'location', 'department', 'class', 'currency', 'price_level', 'tax_code', 'account',
+  'customer', 'vendor', 'contact', 'employee', 'item', 'bom',
+  'quote', 'sales_order', 'purchase_order', 'purchase_requisition',
+  'invoice', 'vendor_bill', 'item_receipt', 'credit_memo', 'vendor_credit', 'customer_deposit',
+  'customer_payment', 'vendor_payment', 'journal_entry',
+];
+export const importRank = (recordType) => {
+  const i = IMPORT_ORDER.indexOf(recordType);
+  return i < 0 ? IMPORT_ORDER.length : i;
+};
+
 // --------------------------------------------------------------- mapping
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Aliases the accounting exports people actually have use for these field
+// names. Shared between suggestMapping (one record type, real columns) and
+// guessRecordType (every record type, scored) so the two can never quietly
+// disagree about what "Customer ID" means.
+const ALIASES = {
+  entity_no: ['customerid', 'customernumber', 'accountnumber', 'code', 'ref'],
+  // "Item Name" and "Product Name" are the two most common headers on an
+  // actual item export -- QuickBooks, Xero and most inventory systems all
+  // use one or the other -- and without them here the single most common
+  // column in the single most common bulk-import file (an item list) went
+  // unmapped, failing every row on a missing "Name".
+  name: ['companyname', 'fullname', 'description', 'title', 'itemname', 'productname'],
+  email: ['emailaddress', 'e-mail'],
+  phone: ['telephone', 'tel', 'phonenumber', 'mobile'],
+  txn_date: ['date', 'transactiondate', 'invoicedate', 'postingdate'],
+  due_date: ['duedate', 'paymentdue'],
+  total: ['amount', 'grosstotal', 'invoicetotal', 'value'],
+  sku: ['itemcode', 'productcode', 'partnumber', 'itemnumber'],
+  number: ['accountno', 'accountcode', 'glcode', 'nominalcode'],
+  quantity: ['qty', 'units'],
+  base_price: ['price', 'unitprice', 'listprice', 'salesprice', 'saleprice'],
+  standard_cost: ['cost', 'unitcost'],
+  memo: ['notes', 'note', 'comment', 'reference', 'narrative'],
+};
+
+/** Match one record type's fields against a header list, without deciding anything. */
+function matchHeaders(recordType, headers, repo = null) {
+  const m = meta.getMeta(recordType, repo);
+  const fields = (m?.fields || []).filter((f) => !f.readOnly);
+  const mapping = {};
+  const unmatched = [];
+  for (const h of headers) {
+    const n = norm(h);
+    if (!n) continue;
+    const hit = fields.find((f) => norm(f.name) === n)
+      || fields.find((f) => norm(f.label) === n)
+      || fields.find((f) => (ALIASES[f.name] || []).some((a) => norm(a) === n));
+    if (!hit && /^custom[._]/i.test(h)) { mapping[h] = h.replace(/^custom[._]/i, 'custom.'); continue; }
+    if (hit) mapping[h] = hit.name; else unmatched.push(h);
+  }
+  return { m, fields, mapping, unmatched };
+}
 
 /**
  * Propose a header -> field mapping.
@@ -34,47 +99,82 @@ const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 export function suggestMapping(recordType, headers) {
   const m = meta.getMeta(recordType);
   if (!m) throw notFound(`Unknown record type "${recordType}"`);
-  const ALIASES = {
-    entity_no: ['customerid', 'customernumber', 'accountnumber', 'code', 'ref'],
-    name: ['companyname', 'fullname', 'description', 'title'],
-    email: ['emailaddress', 'e-mail'],
-    phone: ['telephone', 'tel', 'phonenumber', 'mobile'],
-    txn_date: ['date', 'transactiondate', 'invoicedate', 'postingdate'],
-    due_date: ['duedate', 'paymentdue'],
-    total: ['amount', 'grosstotal', 'invoicetotal', 'value'],
-    sku: ['itemcode', 'productcode', 'partnumber', 'itemnumber'],
-    number: ['accountno', 'accountcode', 'glcode', 'nominalcode'],
-    quantity: ['qty', 'units'],
-    base_price: ['price', 'unitprice', 'listprice', 'salesprice', 'saleprice'],
-    standard_cost: ['cost', 'unitcost'],
-    memo: ['notes', 'note', 'comment', 'reference', 'narrative'],
-  };
-  const fields = m.fields.filter((f) => !f.readOnly);
-  const mapping = {};
-  const unmatched = [];
-
-  for (const h of headers) {
-    const n = norm(h);
-    if (!n) continue;
-    let hit = fields.find((f) => norm(f.name) === n)
-      || fields.find((f) => norm(f.label) === n)
-      || fields.find((f) => (ALIASES[f.name] || []).some((a) => norm(a) === n));
-    // Custom fields arrive as "custom.code" or a matching custom field label.
-    if (!hit && /^custom[._]/i.test(h)) { mapping[h] = h.replace(/^custom[._]/i, 'custom.'); continue; }
-    if (hit) mapping[h] = hit.name; else unmatched.push(h);
-  }
+  const { fields, mapping, unmatched } = matchHeaders(recordType, headers);
   return {
     record_type: recordType, mapping, unmatched,
     fields: fields.map((f) => ({ name: f.name, label: f.label, type: f.type, required: !!f.required, ref: f.ref || null })),
   };
 }
 
+/**
+ * Which record type a sheet is probably meant for -- one score per type,
+ * ranked, never assumed. Used by the bulk-import screen to pre-fill a
+ * sensible guess per sheet or file, which the person confirms or changes;
+ * it is never trusted to commit anything on its own.
+ *
+ * Scored on two things: how many of the sheet's columns match that type's
+ * fields (as a fraction, so a type with three matching columns out of three
+ * beats one with three matching out of thirty), and a bonus when the sheet
+ * or file's own name reads like that type's name -- a tab called "Vendor
+ * Bills" naming itself is a stronger signal than any column ever is.
+ */
+export function guessRecordType(headers, hintName = '', { repo = null, permit = null } = {}) {
+  const hint = norm(hintName);
+  const validHeaders = Math.max(1, headers.filter((h) => norm(h)).length);
+  const candidates = meta.listRecordTypes(repo)
+    .filter((t) => !permit || permit(t))
+    .map((t) => {
+      const info = meta.getMeta(t, repo);
+      if (!info || !info.fields?.length) return null;
+      const { fields, mapping } = matchHeaders(t, headers, repo);
+      const matched = Object.keys(mapping).length;
+      if (!matched) return null;
+      // Recall -- how much of *this sheet* the type explains -- carries the
+      // score, not how much of the type's own field list got used. A real
+      // customer export is often just Name, Email, Phone: three matches out
+      // of customer's twenty-odd fields, dividing by field count, used to
+      // score below a four-field type like "role" that happens to share
+      // two of those names. What a sheet actually is depends on whether its
+      // own columns make sense together, not on how large the target
+      // record type happens to be.
+      const recall = matched / validHeaders;
+      // A small bonus for also being a good fit for the type itself, so two
+      // types tied on recall (both explain 100% of the sheet) are broken
+      // toward the closer match rather than left to mapping-key order.
+      const coverage = matched / Math.max(1, fields.length);
+      const nameScore = hint && (norm(info.label) === hint || norm(info.plural) === hint) ? 0.5
+        : hint && (norm(info.label).includes(hint) || hint.includes(norm(info.label))) ? 0.2 : 0;
+      const requiredFields = fields.filter((f) => f.required).map((f) => f.name);
+      const requiredMatched = requiredFields.filter((r) => Object.values(mapping).includes(r)).length;
+      return {
+        record_type: t, label: info.plural, score: Math.min(1, recall * 0.85 + coverage * 0.15 + nameScore),
+        matched_fields: matched, total_fields: fields.length,
+        required_fields: requiredFields.length, required_matched: requiredMatched,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || b.required_matched - a.required_matched);
+  return candidates;
+}
+
 // ------------------------------------------------------------ coercion
 const TRUEISH = new Set(['1', 'true', 'yes', 'y', 't', 'on', 'active']);
 const FALSEISH = new Set(['0', 'false', 'no', 'n', 'f', 'off', 'inactive', '']);
 
+/**
+ * A `refFrom` field (e.g. txn.entity_id, driven by txn.entity_type) has no
+ * column of its own to map -- `entity_type` is derived at creation time, not
+ * something a spreadsheet supplies, exactly as createTxn itself fills it in
+ * from the transaction type rather than from input. An invoice is always
+ * about a customer, a vendor bill always about a vendor, so the importer
+ * assumes the same default createTxn would.
+ */
+function defaultRefFromType(m) {
+  return (m?.txnType && TXN_TYPES[m.txnType]?.entity) || null;
+}
+
 /** Turn one CSV string into the value the column actually wants. */
-function coerce(field, raw, repo) {
+function coerce(field, raw, repo, m = null) {
   const v = typeof raw === 'string' ? raw.trim() : raw;
   if (v === '' || v === null || v === undefined) return { ok: true, value: null };
 
@@ -116,8 +216,13 @@ function coerce(field, raw, repo) {
       return { ok: true, value: hit };
     }
     case 'reference': {
-      const resolved = resolveRef(repo, field.ref, v);
-      if (!resolved) return { ok: false, message: `No ${field.ref} matches "${v}"` };
+      const refType = field.ref || (field.refFrom ? defaultRefFromType(m) : null);
+      const resolved = resolveRef(repo, refType, v);
+      if (!resolved) {
+        return refType
+          ? { ok: false, message: `No ${refType} matches "${v}"` }
+          : { ok: false, message: `"${v}" cannot be resolved: ${field.label} needs to know which type of record it refers to` };
+      }
       return { ok: true, value: resolved };
     }
     case 'json':
@@ -177,7 +282,7 @@ export function isAmbiguousSlashDate(v) {
 
 /** Look a reference up by id, then by its natural key, then by name. */
 function resolveRef(repo, refType, value) {
-  if (!refType) return String(value);
+  if (!refType) return null;
   const def = meta.REF_LABEL[refType];
   const table = def?.table || meta.getMeta(refType)?.table || refType;
   const v = String(value).trim();
@@ -204,12 +309,17 @@ function resolveRef(repo, refType, value) {
  * Validate a file against a record type. Writes nothing.
  * Returns per-row errors keyed by source line so the UI can point at them.
  */
-export function validateImport(repo, { record_type, text, mapping = null, defaults = {}, mode = 'add', key_field = '', delimiter = null }) {
+export function validateImport(repo, { record_type, text, parsed: given = null, mapping = null, defaults = {}, mode = 'add', key_field = '', delimiter = null }) {
   const m = meta.getMeta(record_type);
   if (!m) throw notFound(`Unknown record type "${record_type}"`);
   if (!MODES.includes(mode)) throw badRequest(`mode must be one of ${MODES.join(', ')}`);
 
-  const parsed = parseCsv(text, { delimiter });
+  // `parsed` -- an already-{headers, rows} structure, from a spreadsheet
+  // sheet the caller read separately -- takes priority over raw CSV `text`
+  // so every caller downstream of this line (coercion, key matching, the
+  // preview, the commit) works identically for a CSV row and a spreadsheet
+  // row. Neither format knows the other exists.
+  const parsed = given || parseCsv(text, { delimiter });
   if (!parsed.rows.length) throw unprocessable('That file has a header but no data rows');
 
   const map = mapping || suggestMapping(record_type, parsed.headers).mapping;
@@ -244,7 +354,7 @@ export function validateImport(repo, { record_type, text, mapping = null, defaul
       const field = fields[fieldName];
       if (!field) { errors.push({ line: row.__line, field: fieldName, message: `"${fieldName}" is not a field on ${m.label}` }); rowFailed = true; continue; }
       if (field.readOnly) continue;
-      const res = coerce(field, raw, repo);
+      const res = coerce(field, raw, repo, m);
       if (!res.ok) { errors.push({ line: row.__line, field: fieldName, column: header, value: raw, message: res.message }); rowFailed = true; continue; }
       if ((field.type === 'date' || field.type === 'datetime') && isAmbiguousSlashDate(raw)) ambiguousDates++;
       if (res.value !== null) values[fieldName] = res.value;
@@ -295,8 +405,8 @@ export function validateImport(repo, { record_type, text, mapping = null, defaul
  * Commit an import. Everything happens in one transaction: a file that fails
  * halfway leaves no partial ledger behind.
  */
-export function commitImport(repo, { record_type, text, mapping = null, defaults = {}, mode = 'add', key_field = '', delimiter = null, filename = '', stop_on_error = true, actor = null }) {
-  const validation = validateImport(repo, { record_type, text, mapping, defaults, mode, key_field, delimiter });
+export function commitImport(repo, { record_type, text, parsed = null, mapping = null, defaults = {}, mode = 'add', key_field = '', delimiter = null, filename = '', format = 'csv', stop_on_error = true, actor = null }) {
+  const validation = validateImport(repo, { record_type, text, parsed, mapping, defaults, mode, key_field, delimiter });
   if (stop_on_error && validation.error_count) {
     throw unprocessable(`${validation.error_count} row${validation.error_count === 1 ? '' : 's'} would not import. Fix them, or re-run with stop_on_error off to import the rest.`);
   }
@@ -332,7 +442,7 @@ export function commitImport(repo, { record_type, text, mapping = null, defaults
 
     repo.insert('import_job', {
       id: jobId, job_no: nextNumber(repo, 'import_job'),
-      record_type, filename, format: 'csv', mode, key_field,
+      record_type, filename, format, mode, key_field,
       mapping: validation.mapping, defaults,
       status: runtimeErrors.length ? 'failed' : 'committed',
       total_rows: validation.total_rows,
@@ -395,6 +505,118 @@ export function reverseImport(repo, jobId) {
 }
 
 /** A ready-to-fill template file for a record type. */
+// ------------------------------------------------------------- spreadsheets
+/**
+ * Enumerate a workbook's sheets, with a record-type guess for each -- the
+ * first thing the bulk-import screen needs before anybody has mapped a
+ * single column. Wraps core/xlsx.mjs's reader and adds nothing of its own
+ * except the guess and a repo-aware permission filter, so this stays a thin
+ * front door onto one xlsx parser rather than a second one.
+ */
+export function readWorkbook(repo, buffer, { headerRow = {}, permit = null } = {}) {
+  const out = parseWorkbook(buffer, headerRow);
+  return {
+    sheets: out.sheets.map((sheet) => ({
+      name: sheet.name,
+      headers: sheet.headers,
+      row_count: sheet.row_count,
+      header_row: sheet.header_row,
+      truncated: !!sheet.truncated,
+      unreadable: !!sheet.unreadable,
+      // Deliberately no `rows` here: this is a preview for the sheet picker,
+      // called once per file before anybody has chosen anything, and a
+      // workbook can hold years of rows across several tabs. Sending them
+      // all back just to list tab names would make "add another file" the
+      // slow part of the screen. readWorkbookSheet below is where the real
+      // data comes from, fetched only for the one sheet actually being
+      // imported.
+      guesses: sheet.unreadable ? [] : guessRecordType(sheet.headers, sheet.name, { repo, permit }).slice(0, 5),
+    })),
+  };
+}
+
+const parseWorkbook = (buffer, headerRow) => {
+  try { return readXlsx(buffer, { headerRow }); }
+  catch (e) { if (e instanceof ZipFormatError) throw unprocessable(e.message); throw e; }
+};
+
+/**
+ * One sheet's actual headers and rows -- what an import needs, as opposed to
+ * what a picker needs. Kept as its own function rather than folded into
+ * readWorkbook precisely so that listing a workbook's tabs never has to pay
+ * for parsing every row of every tab first.
+ */
+export function readWorkbookSheet(buffer, sheetName, { headerRow = {} } = {}) {
+  const out = parseWorkbook(buffer, headerRow);
+  const sheet = sheetName ? out.sheets.find((s) => s.name === sheetName) : out.sheets[0];
+  if (!sheet) throw notFound(sheetName ? `No sheet named "${sheetName}" in that file` : 'That file has no sheets');
+  if (sheet.unreadable) throw unprocessable(`The sheet "${sheet.name}" could not be read from that workbook`);
+  return sheet;
+}
+
+/**
+ * The one-sheet equivalent of readWorkbook, for a plain CSV/TSV file -- so
+ * the bulk-import screen can treat "a workbook" and "a bare text file" as
+ * the same thing: something with one or more sheets, each with a guess.
+ */
+export function describeText(repo, text, { delimiter = null, permit = null, hintName = '' } = {}) {
+  const parsed = parseCsv(text, { delimiter });
+  if (!parsed.rows.length) throw unprocessable('That file has a header but no data rows');
+  return {
+    sheets: [{
+      name: null, headers: parsed.headers, row_count: parsed.rows.length,
+      header_row: 1, truncated: !!parsed.truncated, unreadable: false,
+      guesses: guessRecordType(parsed.headers, hintName, { repo, permit }).slice(0, 5),
+    }],
+  };
+}
+
+/**
+ * Run several imports as one batch: reference data first, transactions
+ * last, so a row that names a customer finds one already there.
+ *
+ * Each item still runs through the exact single-item validateImport /
+ * commitImport pair, in its own transaction -- a batch is an ordering and
+ * a combined report on top of imports that are otherwise completely
+ * ordinary, not a new kind of import with its own rules. If item 4 of 9
+ * fails, items 1-3 stay committed and individually reversible; the report
+ * says plainly which succeeded.
+ */
+export function runBatchValidate(repo, items) {
+  const ordered = [...items].sort((a, b) => importRank(a.record_type) - importRank(b.record_type));
+  return ordered.map((item) => {
+    try {
+      const report = validateImport(repo, item);
+      delete report._prepared;
+      return { ...item.tag, record_type: item.record_type, ok: true, report };
+    } catch (e) {
+      return { ...item.tag, record_type: item.record_type, ok: false, error: e.message };
+    }
+  });
+}
+
+export function runBatchCommit(repo, items, { actor = null } = {}) {
+  const ordered = [...items].sort((a, b) => importRank(a.record_type) - importRank(b.record_type));
+  const results = [];
+  for (const item of ordered) {
+    try {
+      const res = commitImport(repo, { ...item, actor });
+      results.push({ ...item.tag, record_type: item.record_type, ok: true, ...res });
+    } catch (e) {
+      // One sheet failing does not unwind the sheets already committed --
+      // each is its own transaction and its own reversible job, exactly as
+      // if it had been imported on its own a moment earlier.
+      results.push({ ...item.tag, record_type: item.record_type, ok: false, error: e.message });
+    }
+  }
+  return {
+    results,
+    created: results.reduce((a, r) => a + (r.created || 0), 0),
+    updated: results.reduce((a, r) => a + (r.updated || 0), 0),
+    failed: results.filter((r) => !r.ok).length,
+  };
+}
+
 export function importTemplate(repo, recordType, { format = 'csv' } = {}) {
   const m = meta.getMeta(recordType);
   if (!m) throw notFound(`Unknown record type "${recordType}"`);

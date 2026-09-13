@@ -185,7 +185,11 @@ export function createServer(config, db) {
       // upload, and Buffers are real payload shapes and pass untouched.
       let body = null;
       if (MUTATING.has(req.method)) {
-        const parsed = await httpx.readBody(req);
+        // Almost every route is well served by the default cap; a handful --
+        // a workbook of years of invoices, arriving base64-encoded inside the
+        // JSON body -- genuinely need more room, declared explicitly per
+        // route rather than raising the ceiling for everyone.
+        const parsed = await httpx.readBody(req, opts.bodyLimit ? { limit: opts.bodyLimit } : {});
         body = parsed === null || typeof parsed === 'object' || typeof parsed === 'string' || Buffer.isBuffer(parsed)
           ? parsed
           : {};

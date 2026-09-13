@@ -267,12 +267,20 @@ export const API = {
 
   // ---- data interchange
   importTypes: () => get('/api/v1/import/record-types'),
-  importSuggest: (type, text) => post(`/api/v1/import/${type}/suggest`, { text }),
+  // `body` is either { text } for CSV/TSV or { data, sheet, header_row } for
+  // a spreadsheet -- the server tells the two apart, callers just pass what
+  // they read off the file.
+  importSuggest: (type, body) => post(`/api/v1/import/${type}/suggest`, body),
   importValidate: (type, body) => post(`/api/v1/import/${type}/validate`, body),
   importCommit: (type, body) => post(`/api/v1/import/${type}/commit`, body),
   importTemplate: (type, format = 'csv') => download(`/api/v1/import/${type}/template`, { format }),
   importJobs: () => get('/api/v1/import/jobs'),
   reverseImport: (id) => post(`/api/v1/import/jobs/${id}/reverse`),
+  // A workbook's sheets, with a record-type guess for each -- the first look
+  // at a file before anything has been mapped.
+  importWorkbook: (body) => post('/api/v1/import/workbook', body),
+  importBatchValidate: (items) => post('/api/v1/import/batch/validate', { items }),
+  importBatchCommit: (items) => post('/api/v1/import/batch/commit', { items }),
   statementFormats: () => get('/api/v1/bank/statement-formats'),
   previewStatement: (text) => post('/api/v1/bank/statements/preview', { text }),
   importStatementFile: (body) => post('/api/v1/bank/statements/import', body),

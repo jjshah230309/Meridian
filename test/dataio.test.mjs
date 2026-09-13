@@ -17,7 +17,8 @@ import { freshTenant } from './helpers.mjs';
 import * as dataio from '../src/modules/dataio.mjs';
 import { Money } from '../src/core/util.mjs';
 import { parseCsv, toCsv, csvValue, sniffDelimiter } from '../src/core/csv.mjs';
-import { zip } from '../src/core/zip.mjs';
+import { zip, unzip, ZipFormatError } from '../src/core/zip.mjs';
+import { readXlsx } from '../src/core/xlsx.mjs';
 import { parseStatement, sniffFormat } from '../src/modules/bankfiles.mjs';
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
@@ -154,6 +155,128 @@ test('xlsx export is a valid workbook package with the expected parts', async ()
     'xl/worksheets/sheet1.xml', 'xl/styles.xml']) {
     assert.ok(buf.includes(Buffer.from(part, 'utf8')), `missing part ${part}`);
   }
+});
+
+/**
+ * Hand-built the way a real workbook is: shared strings (not the inline
+ * strings core/xlsx.mjs's own writer uses), a title row above the real
+ * header, a blank separator row, and two sheets -- so these tests exercise
+ * what actually arrives from Excel, Google Sheets or an old accounting
+ * system, not just what this project's own writer happens to produce.
+ */
+function realWorkbook() {
+  return zip([
+    { name: '[Content_Types].xml', data: '<?xml version="1.0"?><Types/>' },
+    { name: 'xl/workbook.xml', data: `<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>
+<sheet name="Customers" sheetId="1" r:id="rId1"/>
+<sheet name="Chart of Accounts" sheetId="2" r:id="rId2"/>
+</sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="worksheet" Target="worksheets/sheet2.xml"/>
+</Relationships>` },
+    { name: 'xl/sharedStrings.xml', data: `<?xml version="1.0"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<si><t>Customer List &amp; Notes</t></si>
+<si><t>Name</t></si>
+<si><t>Email</t></si>
+<si><r><t>Smith</t></r><r><t> &amp; </t></r><r><t>Sons</t></r></si>
+<si><t>a@b.com</t></si>
+</sst>` },
+    { name: 'xl/worksheets/sheet1.xml', data: `<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+<row r="1"><c r="A1" t="s"><v>0</v></c></row>
+<row r="3"><c r="A3" t="s"><v>1</v></c><c r="B3" t="s"><v>2</v></c></row>
+<row r="4"></row>
+<row r="5"><c r="A5" t="s"><v>3</v></c><c r="B5" t="s"><v>4</v></c></row>
+</sheetData></worksheet>` },
+    { name: 'xl/worksheets/sheet2.xml', data: `<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+<row r="1"><c r="A1" t="inlineStr"><is><t>Account Code</t></is></c><c r="B1" t="inlineStr"><is><t>Account Name</t></is></c></row>
+<row r="2"><c r="A2" t="inlineStr"><is><t>9999</t></is></c><c r="B2" t="inlineStr"><is><t>Suspense</t></is></c></row>
+</sheetData></worksheet>` },
+  ]);
+}
+
+test('unzip reads back exactly what zip wrote, for many small entries', () => {
+  const files = Array.from({ length: 12 }, (_, i) => ({ name: `part${i}.txt`, data: `payload ${i} `.repeat(30) }));
+  const back = unzip(zip(files));
+  assert.equal(back.size, files.length);
+  for (const f of files) assert.equal(back.get(f.name).toString('utf8'), f.data, `${f.name} must round-trip byte for byte`);
+});
+
+test('unzip rejects what is not a zip, with a message that says what it actually is', () => {
+  const cases = [
+    [Buffer.from('%PDF-1.4'), /PDF/],
+    [Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0, 0, 0, 0]), /older Excel/],
+    [Buffer.from('<html><body>x</body></html>'), /HTML/],
+    [Buffer.from([1, 2, 3, 4]), /does not look like a zip/],
+  ];
+  for (const [buf, expect] of cases) {
+    assert.throws(() => unzip(buf), (e) => e instanceof ZipFormatError && expect.test(e.message), `expected ${expect} for ${buf.subarray(0, 4)}`);
+  }
+});
+
+test('readXlsx reads shared strings, rich-text runs, entities, multiple sheets and a title row above the header', () => {
+  const { sheets } = readXlsx(realWorkbook(), { headerRow: { Customers: 3 } });
+  assert.equal(sheets.length, 2);
+
+  const customers = sheets[0];
+  assert.equal(customers.name, 'Customers');
+  assert.deepEqual(customers.headers, ['Name', 'Email']);
+  assert.equal(customers.rows.length, 1, 'the blank separator row (row 4) must not become a data row');
+  assert.equal(customers.rows[0].Name, 'Smith & Sons', 'rich-text runs concatenate and entities decode');
+  assert.equal(customers.rows[0].Email, 'a@b.com');
+  assert.equal(customers.rows[0].__line, 5, 'the line number is the real spreadsheet row, for error messages that match what Excel shows');
+
+  const accounts = sheets[1];
+  assert.equal(accounts.name, 'Chart of Accounts');
+  assert.deepEqual(accounts.headers, ['Account Code', 'Account Name']);
+  assert.equal(accounts.rows[0]['Account Code'], '9999', 'a plain numeric-looking header value stays text, same as a CSV cell');
+});
+
+test('a spreadsheet import goes through the exact same coercion as a CSV one', async () => {
+  const c = client();
+  await c.login();
+  const buf = zip([
+    { name: '[Content_Types].xml', data: '<?xml version="1.0"?><Types/>' },
+    { name: 'xl/workbook.xml', data: `<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>` },
+    { name: 'xl/worksheets/sheet1.xml', data: `<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+<row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1" t="inlineStr"><is><t>Email</t></is></c></row>
+<row r="2"><c r="A2" t="inlineStr"><is><t>Spreadsheet Customer</t></is></c><c r="B2" t="inlineStr"><is><t>xlsx@import.test</t></is></c></row>
+</sheetData></worksheet>` },
+  ]);
+  const data = buf.toString('base64');
+
+  const workbook = await c.call('POST', '/api/v1/import/workbook', { data, filename: 'test.xlsx' });
+  assert.equal(workbook.status, 200, workbook.text);
+  assert.equal(workbook.body.sheets.length, 1);
+  assert.deepEqual(workbook.body.sheets[0].headers, ['Name', 'Email']);
+  // A tab named "Sheet1" with only Name/Email is genuinely ambiguous -- the
+  // same two columns fit a vendor or a contact equally well -- so the useful
+  // claim here is that guessing runs at all and returns something plausible,
+  // not that it reads the sheet's mind. The dedicated guessing test below
+  // covers accuracy, with the filename hint a real upload always carries.
+  assert.ok(workbook.body.sheets[0].guesses.length > 0, 'a two-column name/email sheet should still get some guess');
+
+  const before = (await c.call('GET', '/api/v1/records/customer?limit=200')).body.total;
+  const commit = await c.call('POST', '/api/v1/import/customer/commit', {
+    data, sheet: 'Sheet1', mapping: { Name: 'name', Email: 'email' }, filename: 'test.xlsx',
+  });
+  assert.equal(commit.status, 200, commit.text);
+  assert.equal(commit.body.created, 1);
+  assert.equal((await c.call('GET', '/api/v1/records/customer?limit=200')).body.total, before + 1);
+  const job = await c.call('GET', `/api/v1/import/jobs/${commit.body.job_id}`);
+  assert.equal(job.body.format, 'xlsx', 'the job should remember it came from a spreadsheet, not a CSV');
 });
 
 // --- bank statement formats ------------------------------------------------
@@ -305,6 +428,153 @@ test('an invalid import row is reported by line and nothing is written', async (
   assert.equal(check.body.errors.length, 1, 'the blank name must be rejected');
   assert.equal(check.body.errors[0].line, 3, 'errors must point at the physical CSV line');
   assert.equal(check.body.valid_rows, 1);
+});
+
+test('a vendor bill CSV resolves entity_id by vendor name, via the same default entity_type createTxn uses', async () => {
+  const c = client();
+  await c.login();
+
+  const vendor = (await c.call('POST', '/api/v1/records/vendor', { name: 'Far East Trading Ltd' })).body;
+  const expenseAccount = (await c.call('GET', '/api/v1/records/account?limit=200')).body.rows
+    .find((a) => a.number === '6600');
+  assert.ok(expenseAccount, 'the default chart of accounts must have an office-supplies expense account');
+
+  // entity_type is never a column a spreadsheet has -- it's derived from the
+  // record type, exactly as createTxn derives it -- so only entity_id is
+  // mapped here. Resolving it needs to fall back to "vendor" on its own.
+  const csv = 'Vendor,Date,Memo\nFar East Trading Ltd,2026-04-01,April supplies\n';
+  const mapping = { Vendor: 'entity_id', Date: 'txn_date', Memo: 'memo' };
+  const defaults = { lines: [{ description: 'Office supplies', quantity: 1, unit_price: 42.5, account_id: expenseAccount.id }] };
+
+  const check = await c.call('POST', '/api/v1/import/vendor_bill/validate', { text: csv, mapping, defaults });
+  assert.equal(check.status, 200, check.text);
+  assert.deepEqual(check.body.errors, [], 'a vendor named exactly as it is in the system must resolve');
+  assert.equal(check.body.valid_rows, 1);
+  // The bug this guards against left the raw name string in entity_id
+  // instead of resolving it to the vendor's actual id.
+  assert.equal(check.body.preview[0].values.entity_id, vendor.id);
+
+  const commit = await c.call('POST', '/api/v1/import/vendor_bill/commit',
+    { text: csv, mapping, defaults, filename: 'bills.csv' });
+  assert.equal(commit.status, 200, commit.text);
+  assert.equal(commit.body.created, 1);
+
+  const bill = (await c.call('GET', '/api/v1/records/vendor_bill?limit=200')).body.rows
+    .find((r) => r.entity_id === vendor.id);
+  assert.ok(bill, 'the vendor bill must have been created, pointing at the real vendor record, not its name');
+});
+
+test('the bulk-import batch runs reference data before the things that point at it, and one bad sheet does not touch the others', async () => {
+  const c = client();
+  await c.login();
+
+  const customerCsv = 'Name,Email\nBatch Customer,batch@import.test\n';
+  // An opportunity's customer_id is resolved by name at import time (see
+  // resolveRef), so this row can only succeed if "Batch Customer" already
+  // exists when it runs -- which only happens because IMPORT_ORDER puts the
+  // customer sheet first. Nothing about the order these two are listed in
+  // below decides that; the server does.
+  const opportunityCsv = 'Name,Customer,Amount\nBig Deal,Batch Customer,5000\n';
+  const badItemCsv = 'SKU,Name\n,No SKU Here\n';
+
+  const items = [
+    { record_type: 'item', text: badItemCsv, tag: { key: 'items' } },
+    { record_type: 'opportunity', text: opportunityCsv,
+      mapping: { Name: 'name', Customer: 'customer_id', Amount: 'amount' }, tag: { key: 'opportunities' } },
+    { record_type: 'customer', text: customerCsv, tag: { key: 'customers' } },
+  ];
+
+  const validated = await c.call('POST', '/api/v1/import/batch/validate', { items });
+  assert.equal(validated.status, 200, validated.text);
+  assert.equal(validated.body.results.length, 3);
+  const byKey = Object.fromEntries(validated.body.results.map((r) => [r.key, r]));
+  assert.equal(byKey.items.report.error_count, 1, 'the blank SKU must be caught before anything commits');
+  assert.equal(byKey.customers.report.valid_rows, 1);
+  // Validation runs each sheet against the database as it stands right now --
+  // before the batch has committed anything -- so "Batch Customer" cannot
+  // resolve yet. That is correct: validating is a preview, not a rehearsal
+  // of the order commit will run in.
+  assert.equal(byKey.opportunities.report.error_count, 1, 'the customer does not exist yet at validation time');
+
+  const committed = await c.call('POST', '/api/v1/import/batch/commit', {
+    items: items.map((i) => ({ ...i, stop_on_error: true })),
+  });
+  assert.equal(committed.status, 200, committed.text);
+  const byKey2 = Object.fromEntries(committed.body.results.map((r) => [r.key, r]));
+  assert.equal(byKey2.customers.ok, true, 'the clean customer sheet must commit');
+  assert.equal(byKey2.customers.created, 1);
+  assert.equal(byKey2.opportunities.ok, true, 'the opportunity must now resolve, because the customer sheet ran first');
+  assert.equal(byKey2.opportunities.created, 1);
+  assert.equal(byKey2.items.ok, false, 'the sheet with a bad row must fail rather than partially write, since this batch asked to stop on error');
+  assert.equal(committed.body.failed, 1);
+
+  const cust = (await c.call('GET', '/api/v1/records/customer?limit=200')).body.rows.find((r) => r.email === 'batch@import.test');
+  assert.ok(cust, 'the customer really was written');
+  const opp = (await c.call('GET', '/api/v1/records/opportunity?limit=200')).body.rows.find((r) => r.name === 'Big Deal');
+  assert.equal(opp.customer_id, cust.id, 'the opportunity must point at the customer this same batch just created');
+  assert.equal((await c.call('GET', '/api/v1/records/item?limit=200')).body.rows.some((r) => r.name === 'No SKU Here'), false,
+    'the item sheet must not have written anything since it failed');
+
+  // Both successful sheets are reversible exactly like a single-file import
+  // would be -- a batch is several ordinary imports, not a new kind of thing.
+  // Reversing the opportunity import first works cleanly; reversing the
+  // customer import while the opportunity still points at it reports the
+  // block rather than either silently deleting a referenced row or refusing
+  // outright (see reverseImport: a reversal is a one-shot action per job,
+  // so this is the one chance this job gets, not a retry loop).
+  const undoOpp = await c.call('POST', `/api/v1/import/jobs/${byKey2.opportunities.job_id}/reverse`);
+  assert.equal(undoOpp.status, 200, undoOpp.text);
+  assert.equal(undoOpp.body.removed, 1);
+  const undoCust = await c.call('POST', `/api/v1/import/jobs/${byKey2.customers.job_id}/reverse`);
+  assert.equal(undoCust.status, 200, undoCust.text);
+  assert.equal(undoCust.body.removed, 1, 'with the opportunity already gone, the customer import reverses cleanly too');
+});
+
+test('a bulk batch defaults to keeping the good rows of a sheet rather than refusing the whole sheet', async () => {
+  const c = client();
+  await c.login();
+  const csv = 'Name,Email\nGood Row,good-bulk@import.test\n,missing-name-bulk@import.test\n';
+  const commit = await c.call('POST', '/api/v1/import/batch/commit', {
+    items: [{ record_type: 'customer', text: csv, tag: { key: 'x' } }],
+  });
+  assert.equal(commit.status, 200, commit.text);
+  const r = commit.body.results[0];
+  assert.equal(r.ok, true);
+  assert.equal(r.created, 1, 'the good row must still be imported');
+  assert.equal(r.skipped, 1, 'the bad row is skipped and reported, not fatal to the sheet');
+});
+
+test('a bulk batch item outside the caller\'s permission is reported, not thrown, and does not stop the rest', async () => {
+  const c = client();
+  await c.login();
+  const items = [
+    { record_type: 'not_a_real_record_type', text: 'A,B\n1,2\n', tag: { key: 'bogus' } },
+    { record_type: 'customer', text: 'Name,Email\nStill Works,still@import.test\n', tag: { key: 'good' } },
+  ];
+  const res = await c.call('POST', '/api/v1/import/batch/commit', { items });
+  assert.equal(res.status, 200, res.text);
+  const byKey = Object.fromEntries(res.body.results.map((r) => [r.key, r]));
+  assert.equal(byKey.bogus.ok, false);
+  assert.match(byKey.bogus.error, /Unknown record type/);
+  assert.equal(byKey.good.ok, true, 'a bad item must not take the good one down with it');
+  assert.equal(byKey.good.created, 1);
+});
+
+test('guessRecordType finds the right type from headers and ranks the guesses', async () => {
+  const c = client();
+  await c.login();
+  const cases = [
+    ['Name,Email,Phone\n', 'customer', 'customers.csv'],
+    ['SKU,Item Name,Price\n', 'item', 'items.csv'],
+    ['Account Code,Account Name,Type\n', 'account', 'chart-of-accounts.csv'],
+  ];
+  for (const [header, expected, filename] of cases) {
+    const res = await c.call('POST', '/api/v1/import/workbook', { text: header + 'x,y,z\n', filename });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.sheets[0].guesses[0]?.record_type, expected, `"${filename}" should be guessed as ${expected}`);
+  }
+  const junk = await c.call('POST', '/api/v1/import/workbook', { text: 'Foo,Bar,Baz\nx,y,z\n', filename: 'x.csv' });
+  assert.equal(junk.body.sheets[0].guesses.length, 0, 'headers matching nothing must produce no guess, not a wrong one');
 });
 
 test('import templates download for every importable record type', async () => {

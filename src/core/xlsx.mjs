@@ -11,7 +11,7 @@
 // Values are written as typed cells -- numbers as numbers, dates as Excel
 // serials -- because that is what makes a pivot table or a Power BI import
 // work without the recipient re-typing every column.
-import { zip } from './zip.mjs';
+import { zip, unzip, ZipFormatError } from './zip.mjs';
 
 const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -287,6 +287,173 @@ ${names.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openx
   ];
 
   return zip(files);
+}
+
+
+// ======================================================================
+// Reading
+// ======================================================================
+//
+// The whole design idea: produce exactly the shape core/csv.mjs's parseCsv
+// already produces -- { headers, rows } where every cell is a plain string
+// -- and hand it to the same coercion pipeline a CSV import already uses.
+// That is what lets an Excel serial date, a number with a thousands
+// separator, or a TRUE/FALSE checkbox column all come out right without
+// this file knowing a single thing about money, dates or field types: it
+// only has to agree with parseCsv on what a "raw cell" looks like, and
+// modules/dataio.mjs's coerce() does the rest, identically for both formats.
+
+const decodeEntities = (s) => s
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+  .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+  .replace(/&amp;/g, '&');                                          // last, or "&amp;lt;" double-decodes
+
+/** Attributes of one tag, order-independent: `<sheet name="X" r:id="rId2"/>` -> {name:'X', 'r:id':'rId2'}. */
+function tagAttrs(tagInner) {
+  const out = {};
+  for (const m of tagInner.matchAll(/([\w:.-]+)\s*=\s*"([^"]*)"/g)) out[m[1]] = decodeEntities(m[2]);
+  return out;
+}
+
+/** "AA3" -> 26 (0-based column index). Ignores the row digits. */
+function colIndexFromRef(ref) {
+  const letters = /^([A-Z]+)/.exec(ref || '')?.[1];
+  if (!letters) return -1;
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+/** Every `<t>` inside one `<si>` (or one `<is>`), concatenated -- rich text is several runs. */
+function textOf(siInner) {
+  return [...siInner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>|<t[^>]*\/>/g)]
+    .map((m) => decodeEntities(m[1] || ''))
+    .join('');
+}
+
+function parseSharedStrings(xml) {
+  if (!xml) return [];
+  return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1]));
+}
+
+/**
+ * One worksheet's raw grid, as an array of { ref, cells: Map<colIndex, {t, v}> }
+ * rows, in document order. `t` is the raw type attribute ('s' | 'str' |
+ * 'inlineStr' | 'b' | 'e' | undefined-means-number); `v` is the raw text
+ * inside <v>, or the inline string text for inlineStr cells.
+ */
+function parseSheetRows(xml) {
+  const rows = [];
+  for (const rowM of xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>|<row\b([^>]*)\/>/g)) {
+    const attrs = tagAttrs(rowM[1] ?? rowM[3] ?? '');
+    const ref = Number(attrs.r) || rows.length + 1;
+    const cells = new Map();
+    const inner = rowM[2] || '';
+    for (const cellM of inner.matchAll(/<c\b([^>]*)\/>|<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+      const cAttrs = tagAttrs(cellM[1] ?? cellM[2] ?? '');
+      const col = colIndexFromRef(cAttrs.r);
+      if (col < 0) continue;
+      const body = cellM[3] || '';
+      if (cAttrs.t === 'inlineStr') {
+        const is = /<is>([\s\S]*?)<\/is>/.exec(body)?.[1] || '';
+        // 'str' (not 's'): the value here is the literal text, not a shared-
+        // string index, and cellText's 's' case would otherwise try to use
+        // this string as a lookup index and get NaN.
+        cells.set(col, { t: 'str', v: textOf(is) });
+        continue;
+      }
+      const v = /<v>([\s\S]*?)<\/v>/.exec(body)?.[1];
+      if (v === undefined) continue;                                // a formula with no cached result, or a truly blank cell
+      cells.set(col, { t: cAttrs.t, v: decodeEntities(v) });
+    }
+    if (cells.size) rows.push({ ref, cells });
+  }
+  return rows;
+}
+
+/** One cell's raw value resolved to a plain string, the way a CSV field already is. */
+function cellText(cell, sharedStrings) {
+  if (!cell) return '';
+  switch (cell.t) {
+    case 's': { const i = Number(cell.v); return sharedStrings[i] ?? ''; }
+    case 'str': return cell.v;                                      // formula result, already text
+    case 'b': return cell.v === '1' ? 'TRUE' : 'FALSE';
+    case 'e': return '';                                             // #REF!, #DIV/0! etc -- an error is not data
+    default: return cell.v;                                          // number, or a date (still a serial at this point)
+  }
+}
+
+/**
+ * Read an .xlsx workbook into { sheets: [{ name, headers, rows }] }, one
+ * entry per worksheet in the tab order Excel shows them, `rows` shaped
+ * exactly like core/csv.mjs's parseCsv output.
+ *
+ * `headerRow` (1-based, per sheet name, default 1) lets a sheet whose real
+ * header is not row one -- a title or logo row above the table, which real
+ * exports do have -- be read correctly. `maxRows` bounds how many data rows
+ * are read per sheet, matching parseCsv's own guard against an unbounded file.
+ */
+export function readXlsx(buf, { headerRow = {}, maxRows = 100_000 } = {}) {
+  let entries;
+  try { entries = unzip(buf); }
+  catch (e) {
+    if (e instanceof ZipFormatError) throw new ZipFormatError(`Could not read this as an Excel file. ${e.message}`);
+    throw e;
+  }
+
+  const workbookXml = entries.get('xl/workbook.xml');
+  if (!workbookXml) throw new ZipFormatError('This zip file does not contain an Excel workbook (no xl/workbook.xml).');
+  const relsXml = entries.get('xl/_rels/workbook.xml.rels') || '';
+  const sharedStrings = parseSharedStrings(entries.get('xl/sharedStrings.xml')?.toString('utf8'));
+
+  const relTarget = new Map();
+  for (const m of relsXml.toString('utf8').matchAll(/<Relationship\b([^>]*)\/>/g)) {
+    const a = tagAttrs(m[1]);
+    if (a.Id && a.Target) relTarget.set(a.Id, a.Target.replace(/^\/?xl\//, ''));
+  }
+
+  const sheetMeta = [...workbookXml.toString('utf8').matchAll(/<sheet\b([^>]*)\/>/g)]
+    .map((m) => tagAttrs(m[1]))
+    .filter((a) => a.name);
+
+  const sheets = [];
+  for (const meta of sheetMeta) {
+    const rId = meta['r:id'] || Object.keys(meta).find((k) => k.endsWith(':id') && meta[k]) && meta[Object.keys(meta).find((k) => k.endsWith(':id'))];
+    const target = rId && relTarget.get(rId);
+    const path = target ? `xl/${target}` : null;
+    const sheetXmlBuf = path && entries.get(path);
+    if (!sheetXmlBuf) { sheets.push({ name: meta.name, headers: [], rows: [], row_count: 0, unreadable: true }); continue; }
+
+    const grid = parseSheetRows(sheetXmlBuf.toString('utf8'));
+    const wantHeaderAt = headerRow[meta.name] || 1;
+    const headerRowData = grid.find((r) => r.ref === wantHeaderAt) || grid[0];
+    const headerCols = headerRowData
+      ? [...headerRowData.cells.entries()]
+        .map(([col, cell]) => [col, cellText(cell, sharedStrings).trim()])
+        .filter(([, name]) => name !== '')
+        .sort((a, b) => a[0] - b[0])
+      : [];
+    const headers = headerCols.map(([, name]) => name);
+
+    const rows = [];
+    for (const r of grid) {
+      if (r.ref <= wantHeaderAt) continue;
+      if (rows.length >= maxRows) break;
+      const obj = { __line: r.ref };
+      let anyValue = false;
+      for (const [col, name] of headerCols) {
+        const text = cellText(r.cells.get(col), sharedStrings);
+        obj[name] = text;
+        if (text !== '') anyValue = true;
+      }
+      if (anyValue) rows.push(obj);                                 // a wholly blank row is not data, same as a blank CSV line
+    }
+
+    sheets.push({ name: meta.name, headers, rows, row_count: rows.length, header_row: wantHeaderAt, truncated: rows.length >= maxRows });
+  }
+
+  return { sheets };
 }
 
 /** Excel number format for an ISO currency code. */

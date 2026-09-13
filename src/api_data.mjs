@@ -16,11 +16,37 @@ import * as platform from './modules/platform.mjs';
 const LEVEL = rbac.LEVEL;
 const int = (v, d = 0) => { const n = Number.parseInt(v, 10); return Number.isFinite(n) ? n : d; };
 
+// A spreadsheet arrives base64-encoded inside the JSON body, which costs
+// about a third more bytes than the file itself -- so years of invoices as
+// one workbook needs real headroom, not the 8 MB every other route is
+// rightly capped at.
+const IMPORT_BODY_LIMIT = 60 * 1024 * 1024;
+
 /** Absolute base URL of this server, as the client reached it. */
 const baseUrlOf = (ctx) => {
   const proto = ctx.req.headers['x-forwarded-proto'] || 'http';
   return `${proto}://${ctx.req.headers.host}`;
 };
+
+/**
+ * One file's contents, whichever shape the client sent: raw CSV/TSV text,
+ * or a base64-encoded spreadsheet plus which sheet of it to read. Every
+ * import route accepts either, so a single-file screen and the bulk-import
+ * screen can hand the server the same body shape.
+ */
+function resolveInput(repo, b) {
+  if (typeof b.text === 'string') return { text: b.text };
+  if (typeof b.data === 'string') {
+    let buf;
+    try { buf = Buffer.from(b.data, 'base64'); }
+    catch { throw badRequest('`data` must be base64-encoded file contents'); }
+    // readWorkbookSheet, not readWorkbook: this needs the one sheet's actual
+    // rows to import, not the whole workbook's list of sheet names.
+    const sheet = dataio.readWorkbookSheet(buf, b.sheet, { headerRow: b.header_row ? { [b.sheet]: b.header_row } : {} });
+    return { parsed: { headers: sheet.headers, rows: sheet.rows } };
+  }
+  throw badRequest('Provide either `text` (CSV) or `data` (a base64-encoded spreadsheet)');
+}
 
 /** Wrap a dataio result as a downloadable response. */
 const asDownload = (built, { inline = false } = {}) => ({
@@ -56,42 +82,139 @@ export function registerDataRoutes(r, P) {
     rbac.require$(ctx.access, m.permission, LEVEL.CREATE);
     const headers = ctx.body?.headers;
     if (Array.isArray(headers)) return dataio.suggestMapping(ctx.params.type, headers);
-    if (typeof ctx.body?.text === 'string') {
-      const validated = dataio.validateImport(ctx.repo, { record_type: ctx.params.type, text: ctx.body.text });
-      return { ...dataio.suggestMapping(ctx.params.type, validated.headers), sample: validated.preview.slice(0, 5) };
-    }
-    throw badRequest('Provide either `headers` or the file `text`');
-  });
+    const input = resolveInput(ctx.repo, ctx.body || {});
+    const validated = dataio.validateImport(ctx.repo, { record_type: ctx.params.type, ...input });
+    return { ...dataio.suggestMapping(ctx.params.type, validated.headers), sample: validated.preview.slice(0, 5) };
+  }, { bodyLimit: IMPORT_BODY_LIMIT });
 
   r.post(`${P}/import/:type/validate`, async (ctx) => {
     const m = meta.getMeta(ctx.params.type, ctx.repo);
     if (!m) throw notFound(`Unknown record type "${ctx.params.type}"`);
     rbac.require$(ctx.access, m.permission, LEVEL.CREATE);
     const b = ctx.body || {};
-    if (!b.text) throw badRequest('`text` (the file contents) is required');
+    const input = resolveInput(ctx.repo, b);
     const out = dataio.validateImport(ctx.repo, {
-      record_type: ctx.params.type, text: b.text, mapping: b.mapping || null,
+      record_type: ctx.params.type, ...input, mapping: b.mapping || null,
       defaults: b.defaults || {}, mode: b.mode || 'add', key_field: b.key_field || '',
       delimiter: b.delimiter || null,
     });
     delete out._prepared;                          // internal, and large
     return out;
-  });
+  }, { bodyLimit: IMPORT_BODY_LIMIT });
 
   r.post(`${P}/import/:type/commit`, async (ctx) => {
     const m = meta.getMeta(ctx.params.type, ctx.repo);
     if (!m) throw notFound(`Unknown record type "${ctx.params.type}"`);
     rbac.require$(ctx.access, m.permission, LEVEL.CREATE);
     const b = ctx.body || {};
-    if (!b.text) throw badRequest('`text` (the file contents) is required');
+    const input = resolveInput(ctx.repo, b);
     return dataio.commitImport(ctx.repo, {
-      record_type: ctx.params.type, text: b.text, mapping: b.mapping || null,
+      record_type: ctx.params.type, ...input, mapping: b.mapping || null,
       defaults: b.defaults || {}, mode: b.mode || 'add', key_field: b.key_field || '',
       delimiter: b.delimiter || null, filename: b.filename || '',
+      format: input.parsed ? 'xlsx' : 'csv',
       stop_on_error: b.stop_on_error !== false,
       actor: ctx.user?.id || null,
     });
-  });
+  }, { bodyLimit: IMPORT_BODY_LIMIT });
+
+  // ============================================== bulk / spreadsheet import
+  // "I have a workbook (or a folder of them) from the old system, import all
+  // of it" is a different shape of problem from one file into one screen:
+  // several sheets, several record types, and an order that matters because
+  // an invoice's customer has to exist before the invoice does. These three
+  // routes are additive -- every one of them is built from the exact same
+  // dataio functions the single-file routes above already use.
+  r.post(`${P}/import/workbook`, async (ctx) => {
+    rbac.require$(ctx.access, 'data_import', LEVEL.VIEW);
+    const b = ctx.body || {};
+    const permit = (t) => {
+      const info = meta.getMeta(t, ctx.repo);
+      return !!info && rbac.levelFor(ctx.access, info.permission) >= LEVEL.CREATE;
+    };
+    // A bare CSV/TSV is treated as a one-sheet workbook, so the bulk-import
+    // screen can enumerate any file the same way regardless of its format --
+    // and the file's own name is the hint a workbook sheet would otherwise
+    // supply, so "customers.csv" gets the same benefit a tab named
+    // "Customers" does.
+    if (typeof b.text === 'string') {
+      const hintName = String(b.filename || '').replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ');
+      return dataio.describeText(ctx.repo, b.text, { delimiter: b.delimiter || null, permit, hintName });
+    }
+    if (typeof b.data !== 'string') throw badRequest('Provide either `text` (CSV) or `data` (base64-encoded spreadsheet contents)');
+    let buf;
+    try { buf = Buffer.from(b.data, 'base64'); }
+    catch { throw badRequest('`data` must be base64-encoded'); }
+    return dataio.readWorkbook(ctx.repo, buf, { headerRow: b.header_row || {}, permit });
+  }, { bodyLimit: IMPORT_BODY_LIMIT });
+
+  /**
+   * Shared prep for both batch routes: turn the client's item list into
+   * dataio-ready items, checking every item's own permission -- a batch can
+   * span several record types, so one CREATE check up front is not enough --
+   * without letting one item outside somebody's role abort the whole batch.
+   * An unpermitted item comes back as a normal-looking failed result instead
+   * of a thrown error, which is what lets nine good sheets still import
+   * alongside the one nobody here is allowed to touch.
+   */
+  function prepareBatchItems(ctx, rawItems) {
+    if (!Array.isArray(rawItems) || !rawItems.length) throw badRequest('`items` must be a non-empty array');
+    const items = [];
+    const forbidden = [];
+    for (const raw of rawItems) {
+      // dataio's batch runners spread `tag` onto the top level of each result
+      // (`{...item.tag, record_type, ok, ...}`), which is what lets a caller
+      // hand back its own identifier -- a sheet key, a row index -- and get
+      // it echoed on the matching result. A caller that does not bother
+      // supplying one still gets something identifiable, from sheet/filename.
+      const tag = raw.tag && typeof raw.tag === 'object' && !Array.isArray(raw.tag)
+        ? raw.tag
+        : { sheet: raw.sheet ?? null, filename: raw.filename ?? null };
+      const type = raw.record_type;
+      const m = type && meta.getMeta(type, ctx.repo);
+      if (!m) { forbidden.push({ ...tag, record_type: type || null, ok: false, error: `Unknown record type "${type}"` }); continue; }
+      if (rbac.levelFor(ctx.access, m.permission) < LEVEL.CREATE) {
+        forbidden.push({ ...tag, record_type: type, ok: false, error: `Not permitted to create ${m.plural}` });
+        continue;
+      }
+      let input;
+      try { input = resolveInput(ctx.repo, raw); }
+      catch (e) { forbidden.push({ ...tag, record_type: type, ok: false, error: e.message }); continue; }
+      items.push({
+        tag, record_type: type, ...input,
+        mapping: raw.mapping || null, defaults: raw.defaults || {},
+        mode: raw.mode || 'add', key_field: raw.key_field || '', delimiter: raw.delimiter || null,
+        filename: raw.filename || raw.sheet || '', format: input.parsed ? 'xlsx' : 'csv',
+        // Matching the single-file screen's own commit button: import the
+        // rows that are good and report the rest as skipped, rather than
+        // refusing a whole sheet over one bad row -- across a real batch of
+        // several years of files, one imperfect row somewhere is the rule,
+        // not the exception.
+        stop_on_error: raw.stop_on_error === true,
+      });
+    }
+    return { items, forbidden };
+  }
+
+  r.post(`${P}/import/batch/validate`, async (ctx) => {
+    rbac.require$(ctx.access, 'data_import', LEVEL.CREATE);
+    const { items, forbidden } = prepareBatchItems(ctx, (ctx.body || {}).items);
+    const results = items.length ? dataio.runBatchValidate(ctx.repo, items) : [];
+    return { results: [...forbidden, ...results] };
+  }, { bodyLimit: IMPORT_BODY_LIMIT });
+
+  r.post(`${P}/import/batch/commit`, async (ctx) => {
+    rbac.require$(ctx.access, 'data_import', LEVEL.CREATE);
+    const { items, forbidden } = prepareBatchItems(ctx, (ctx.body || {}).items);
+    const out = items.length
+      ? dataio.runBatchCommit(ctx.repo, items, { actor: ctx.user?.id || null })
+      : { results: [], created: 0, updated: 0, failed: 0 };
+    return {
+      ...out,
+      results: [...forbidden, ...out.results],
+      failed: out.failed + forbidden.length,
+    };
+  }, { bodyLimit: IMPORT_BODY_LIMIT });
 
   r.get(`${P}/import/jobs`, async (ctx) => {
     rbac.require$(ctx.access, 'data_import', LEVEL.VIEW);
