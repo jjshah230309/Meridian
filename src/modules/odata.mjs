@@ -80,7 +80,27 @@ export const ANALYTIC_SETS = {
       { name: 'AccountType', type: 'Edm.String' }, { name: 'Subtype', type: 'Edm.String' },
       { name: 'SubsidiaryName', type: 'Edm.String' }, { name: 'Amount', type: 'Edm.Decimal' },
     ],
-    rows(repo) {
+    colMap: {
+      PeriodName: 'p.name', PeriodStart: 'p.start_date', PeriodEnd: 'p.end_date', FiscalYear: 'p.fiscal_year',
+      AccountNumber: 'a.number', AccountName: 'a.name', AccountType: 'a.type', Subtype: 'a.subtype',
+      SubsidiaryName: 's.name', Amount: 'SUM(CASE WHEN a.type = \'INCOME\' THEN b.base_credit - b.base_debit ELSE b.base_debit - b.base_credit END)',
+    },
+    rows(repo, { filter, order } = {}) {
+      const params = [];
+      let where = `b.tenant_id = :t AND a.type IN ('INCOME','EXPENSE')`;
+      if (filter) {
+        const sql = filterToSql(filter, params);
+        where += ` AND ${sql}`;
+      }
+      let orderBy = `p.start_date, a.number`;
+      if (order) {
+        orderBy = order.split(',').map(p => {
+          const [name, dir] = p.trim().split(/\s+/);
+          const col = this.colMap[name];
+          if (!col) return null;
+          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
+        }).filter(Boolean).join(', ') || orderBy;
+      }
       return repo.query(`
         SELECT p.name AS PeriodName, p.start_date AS PeriodStart, p.end_date AS PeriodEnd, p.fiscal_year AS FiscalYear,
                a.number AS AccountNumber, a.name AS AccountName, a.type AS AccountType,
@@ -91,9 +111,9 @@ export const ANALYTIC_SETS = {
         JOIN account a ON a.tenant_id = b.tenant_id AND a.id = b.account_id
         JOIN accounting_period p ON p.tenant_id = b.tenant_id AND p.id = b.period_id
         JOIN subsidiary s ON s.tenant_id = b.tenant_id AND s.id = b.subsidiary_id
-        WHERE b.tenant_id = :t AND a.type IN ('INCOME','EXPENSE')
+        WHERE ${where}
         GROUP BY p.id, a.id, s.id
-        ORDER BY p.start_date, a.number`)
+        ORDER BY ${orderBy}`, params)
         .map((r) => ({ ...r, Amount: Money.toNumber(r.AmountMinor), AmountMinor: undefined }));
     },
   },
@@ -106,7 +126,27 @@ export const ANALYTIC_SETS = {
       { name: 'Debit', type: 'Edm.Decimal' }, { name: 'Credit', type: 'Edm.Decimal' },
       { name: 'Balance', type: 'Edm.Decimal' },
     ],
-    rows(repo) {
+    colMap: {
+      PeriodName: 'p.name', PeriodEnd: 'p.end_date', AccountNumber: 'a.number', AccountName: 'a.name',
+      AccountType: 'a.type', SubsidiaryName: 's.name',
+      Debit: 'SUM(b.base_debit)', Credit: 'SUM(b.base_credit)', Balance: 'SUM(b.base_debit) - SUM(b.base_credit)',
+    },
+    rows(repo, { filter, order } = {}) {
+      const params = [];
+      let where = `b.tenant_id = :t`;
+      if (filter) {
+        const sql = filterToSql(filter, params);
+        where += ` AND ${sql}`;
+      }
+      let orderBy = `p.start_date, a.number`;
+      if (order) {
+        orderBy = order.split(',').map(p => {
+          const [name, dir] = p.trim().split(/\s+/);
+          const col = this.colMap[name];
+          if (!col) return null;
+          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
+        }).filter(Boolean).join(', ') || orderBy;
+      }
       return repo.query(`
         SELECT p.name AS PeriodName, p.end_date AS PeriodEnd,
                a.number AS AccountNumber, a.name AS AccountName, a.type AS AccountType, s.name AS SubsidiaryName,
@@ -115,7 +155,7 @@ export const ANALYTIC_SETS = {
         JOIN account a ON a.tenant_id = b.tenant_id AND a.id = b.account_id
         JOIN accounting_period p ON p.tenant_id = b.tenant_id AND p.id = b.period_id
         JOIN subsidiary s ON s.tenant_id = b.tenant_id AND s.id = b.subsidiary_id
-        WHERE b.tenant_id = :t GROUP BY p.id, a.id, s.id ORDER BY p.start_date, a.number`)
+        WHERE ${where} GROUP BY p.id, a.id, s.id ORDER BY ${orderBy}`, params)
         .map((r) => ({
           PeriodName: r.PeriodName, PeriodEnd: r.PeriodEnd, AccountNumber: r.AccountNumber,
           AccountName: r.AccountName, AccountType: r.AccountType, SubsidiaryName: r.SubsidiaryName,
@@ -135,7 +175,30 @@ export const ANALYTIC_SETS = {
       { name: 'SalesRep', type: 'Edm.String' }, { name: 'LocationName', type: 'Edm.String' },
       { name: 'SubsidiaryName', type: 'Edm.String' }, { name: 'Status', type: 'Edm.String' },
     ],
-    rows(repo) {
+    colMap: {
+      InvoiceNo: 't.txn_no', Date: 't.txn_date', CustomerName: 'c.name', CustomerNo: 'c.entity_no',
+      Sku: 'i.sku', ItemName: 'i.name', Description: 'tl.description', Quantity: 'tl.quantity',
+      UnitPrice: 'tl.unit_price', LineAmount: 'tl.amount', Cost: 'i.standard_cost',
+      Margin: 'tl.amount - (tl.quantity * i.standard_cost)',
+      SalesRep: '(e.first_name || \' \' || e.last_name)', LocationName: 'l.name',
+      SubsidiaryName: 's.name', Status: 't.status',
+    },
+    rows(repo, { filter, order } = {}) {
+      const params = [];
+      let where = `tl.tenant_id = :t AND t.type = 'INVOICE' AND t.status != 'voided'`;
+      if (filter) {
+        const sql = filterToSql(filter, params);
+        where += ` AND ${sql}`;
+      }
+      let orderBy = `t.txn_date DESC`;
+      if (order) {
+        orderBy = order.split(',').map(p => {
+          const [name, dir] = p.trim().split(/\s+/);
+          const col = this.colMap[name];
+          if (!col) return null;
+          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
+        }).filter(Boolean).join(', ') || orderBy;
+      }
       return repo.query(`
         SELECT t.txn_no AS InvoiceNo, t.txn_date AS Date, t.status AS Status,
                c.name AS CustomerName, COALESCE(c.entity_no,'') AS CustomerNo,
@@ -152,8 +215,8 @@ export const ANALYTIC_SETS = {
         LEFT JOIN employee e ON e.tenant_id = t.tenant_id AND e.id = t.sales_rep_id
         LEFT JOIN location l ON l.tenant_id = t.tenant_id AND l.id = t.location_id
         JOIN subsidiary s ON s.tenant_id = t.tenant_id AND s.id = t.subsidiary_id
-        WHERE tl.tenant_id = :t AND t.type = 'INVOICE' AND t.status != 'voided'
-        ORDER BY t.txn_date DESC`)
+        WHERE ${where}
+        ORDER BY ${orderBy}`, params)
         .map((r) => {
           const qty = Qty.toNumber(r.Q);
           const cost = Qty.extend(r.Q, r.UC);
@@ -175,14 +238,33 @@ export const ANALYTIC_SETS = {
       { name: 'Total', type: 'Edm.Decimal' }, { name: 'Outstanding', type: 'Edm.Decimal' },
       { name: 'DaysOverdue', type: 'Edm.Int64' }, { name: 'Band', type: 'Edm.String' },
     ],
-    rows(repo) {
+    colMap: {
+      InvoiceNo: 't.txn_no', Date: 't.txn_date', DueDate: 't.due_date', CustomerName: 'c.name',
+      Total: 't.total', Outstanding: 't.amount_remaining',
+    },
+    rows(repo, { filter, order } = {}) {
       const now = today();
+      const params = [];
+      let where = `t.tenant_id = :t AND t.type = 'INVOICE' AND t.status != 'voided' AND t.amount_remaining > 0`;
+      if (filter) {
+        const sql = filterToSql(filter, params);
+        where += ` AND ${sql}`;
+      }
+      let orderBy = `t.due_date`;
+      if (order) {
+        orderBy = order.split(',').map(p => {
+          const [name, dir] = p.trim().split(/\s+/);
+          const col = this.colMap[name];
+          if (!col) return null;
+          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
+        }).filter(Boolean).join(', ') || orderBy;
+      }
       return repo.query(`
         SELECT t.txn_no AS InvoiceNo, t.txn_date AS Date, t.due_date AS DueDate,
                COALESCE(c.name,'') AS CustomerName, t.total AS T, t.amount_remaining AS O
         FROM txn t LEFT JOIN customer c ON c.tenant_id = t.tenant_id AND c.id = t.entity_id
-        WHERE t.tenant_id = :t AND t.type = 'INVOICE' AND t.status != 'voided' AND t.amount_remaining > 0
-        ORDER BY t.due_date`)
+        WHERE ${where}
+        ORDER BY ${orderBy}`, params)
         .map((r) => {
           const days = r.DueDate ? Math.floor((Date.parse(now) - Date.parse(r.DueDate)) / 86400000) : 0;
           const band = days <= 0 ? 'Current' : days <= 30 ? '1-30' : days <= 60 ? '31-60' : days <= 90 ? '61-90' : '90+';
@@ -204,7 +286,28 @@ export const ANALYTIC_SETS = {
       { name: 'TotalValue', type: 'Edm.Decimal' }, { name: 'ReorderPoint', type: 'Edm.Decimal' },
       { name: 'BelowReorder', type: 'Edm.Boolean' },
     ],
-    rows(repo) {
+    colMap: {
+      Sku: 'i.sku', ItemName: 'i.name', LocationName: 'l.name', OnHand: 'il.qty_on_hand',
+      Committed: 'il.qty_committed', Available: 'il.qty_on_hand - il.qty_committed',
+      OnOrder: 'il.qty_on_order', AverageCost: 'il.avg_cost', TotalValue: 'il.total_value',
+      ReorderPoint: 'il.reorder_point', BelowReorder: 'il.qty_on_hand - il.qty_committed < il.reorder_point',
+    },
+    rows(repo, { filter, order } = {}) {
+      const params = [];
+      let where = `il.tenant_id = :t`;
+      if (filter) {
+        const sql = filterToSql(filter, params);
+        where += ` AND ${sql}`;
+      }
+      let orderBy = `i.sku, l.name`;
+      if (order) {
+        orderBy = order.split(',').map(p => {
+          const [name, dir] = p.trim().split(/\s+/);
+          const col = this.colMap[name];
+          if (!col) return null;
+          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
+        }).filter(Boolean).join(', ') || orderBy;
+      }
       return repo.query(`
         SELECT i.sku AS Sku, i.name AS ItemName, l.name AS LocationName,
                il.qty_on_hand AS OH, il.qty_committed AS CM, il.qty_on_order AS OO,
@@ -212,7 +315,7 @@ export const ANALYTIC_SETS = {
         FROM item_location il
         JOIN item i ON i.tenant_id = il.tenant_id AND i.id = il.item_id
         JOIN location l ON l.tenant_id = il.tenant_id AND l.id = il.location_id
-        WHERE il.tenant_id = :t ORDER BY i.sku, l.name`)
+        WHERE ${where} ORDER BY ${orderBy}`, params)
         .map((r) => ({
           Sku: r.Sku, ItemName: r.ItemName, LocationName: r.LocationName,
           OnHand: Qty.toNumber(r.OH), Committed: Qty.toNumber(r.CM),
@@ -232,7 +335,27 @@ export const ANALYTIC_SETS = {
       { name: 'ActualClose', type: 'Edm.Date' }, { name: 'IsOpen', type: 'Edm.Boolean' },
       { name: 'Owner', type: 'Edm.String' },
     ],
-    rows(repo) {
+    colMap: {
+      Name: 'o.name', CustomerName: 'c.name', Stage: 'o.stage', ForecastCategory: 'o.forecast_category',
+      Amount: 'o.amount', Probability: 'o.probability', ExpectedClose: 'o.expected_close',
+      ActualClose: 'o.actual_close', Owner: '(e.first_name || \' \' || e.last_name)',
+    },
+    rows(repo, { filter, order } = {}) {
+      const params = [];
+      let where = `o.tenant_id = :t`;
+      if (filter) {
+        const sql = filterToSql(filter, params);
+        where += ` AND ${sql}`;
+      }
+      let orderBy = `o.expected_close`;
+      if (order) {
+        orderBy = order.split(',').map(p => {
+          const [name, dir] = p.trim().split(/\s+/);
+          const col = this.colMap[name];
+          if (!col) return null;
+          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
+        }).filter(Boolean).join(', ') || orderBy;
+      }
       return repo.query(`
         SELECT o.name AS Name, COALESCE(c.name,'') AS CustomerName, o.stage AS Stage,
                COALESCE(o.forecast_category,'') AS ForecastCategory,
@@ -242,7 +365,7 @@ export const ANALYTIC_SETS = {
         FROM opportunity o
         LEFT JOIN customer c ON c.tenant_id = o.tenant_id AND c.id = o.customer_id
         LEFT JOIN employee e ON e.tenant_id = o.tenant_id AND e.id = o.sales_rep_id
-        WHERE o.tenant_id = :t ORDER BY o.expected_close`)
+        WHERE ${where} ORDER BY ${orderBy}`, params)
         .map((r) => ({
           Name: r.Name, CustomerName: r.CustomerName, Stage: r.Stage,
           ForecastCategory: r.ForecastCategory,
@@ -447,14 +570,14 @@ export function readSet(repo, access, setName, query = {}, baseUrl = '') {
 
   if (analytic) {
     if (rbac.levelFor(access, 'account') < rbac.LEVEL.VIEW) throw badRequest('Not permitted to read this feed');
-    let rows = analytic.rows(repo).map((r, idx) => ({ RowId: idx + 1, ...r }));
-    if (query.$filter) {
-      const cols = new Map(analytic.columns.map((c) => [c.name.toLowerCase(), c.name]));
-      cols.set('rowid', 'RowId');
-      const ast = parseFilter(query.$filter, (f) => cols.get(String(f).toLowerCase()));
-      rows = rows.filter((r) => filterMatches(ast, r));
-    }
-    if (query.$orderby) rows = orderInMemory(rows, query.$orderby);
+    let rows = analytic.rows(repo, {
+      filter: query.$filter ? parseFilter(query.$filter, (f) => {
+        const cols = new Map(analytic.columns.map((c) => [c.name.toLowerCase(), c.name]));
+        cols.set('rowid', 'RowId');
+        return cols.get(String(f).toLowerCase());
+      }) : null,
+      order: query.$orderby,
+    }).map((r, idx) => ({ RowId: idx + 1, ...r }));
     const total = rows.length;
     const page = rows.slice(skip, skip + top);
     return {
@@ -506,6 +629,15 @@ export function readSet(repo, access, setName, query = {}, baseUrl = '') {
     [...params, top, skip]);
 
   const refFields = fields.filter((f) => f.type === 'reference');
+
+  const allRefs = [];
+  for (const row of rows) {
+    for (const f of refFields) {
+      if (row[f.name]) allRefs.push({ type: f.ref, id: row[f.name] });
+    }
+  }
+  const labels = refLabelsBulk(repo, allRefs);
+
   const value = rows.map((row) => {
     const out = { Id: row.id };
     for (const f of fields) {
@@ -518,7 +650,8 @@ export function readSet(repo, access, setName, query = {}, baseUrl = '') {
               : raw ?? null;
     }
     for (const f of refFields) {
-      out[`${pascal(f.name)}Label`] = row[f.name] ? refLabel(repo, f.ref, row[f.name]) : null;
+      const refId = row[f.name];
+      out[`${pascal(f.name)}Label`] = refId ? labels.get(`${f.ref}:${refId}`) : null;
     }
     return out;
   });
@@ -542,6 +675,29 @@ function refLabel(repo, refType, id) {
   const label = row ? def.label(row) : null;
   perRepo.set(key, label);
   return label;
+}
+
+/** Resolve many reference labels in as few queries as possible. */
+function refLabelsBulk(repo, refs) {
+  if (!refs.length) return new Map();
+  const byType = new Map();
+  for (const { type, id } of refs) {
+    if (!id) continue;
+    if (!byType.has(type)) byType.set(type, new Set());
+    byType.get(type).add(id);
+  }
+
+  const labels = new Map();
+  for (const [type, ids] of byType) {
+    const def = meta.REF_LABEL[type];
+    if (!def) continue;
+    const idList = [...ids];
+    const rows = repo.query(`SELECT ${def.cols.join(', ')} FROM ${def.table} WHERE tenant_id = :t AND id IN (${idList.map(() => '?').join(',')})`, idList);
+    for (const row of rows) {
+      labels.set(`${type}:${row.id}`, def.label(row));
+    }
+  }
+  return labels;
 }
 
 const project = (rows, keys) => rows.map((r) => Object.fromEntries(keys.filter((k) => k in r).map((k) => [k, r[k]])));

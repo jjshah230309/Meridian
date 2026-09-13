@@ -19,11 +19,21 @@ export function listBankAccounts(repo) {
       LEFT JOIN subsidiary s ON s.tenant_id = ba.tenant_id AND s.id = ba.subsidiary_id
       WHERE ba.tenant_id = :t ORDER BY ba.name`);
   const balances = gl.balanceMap(repo);
+
+  const counts = repo.query(`SELECT bank_account_id, COUNT(*) c FROM bank_txn WHERE tenant_id = :t AND status IN ('unmatched','matched') GROUP BY bank_account_id`);
+  const countMap = new Map(counts.map((r) => [r.bank_account_id, r.c]));
+
+  const latest = repo.query(`SELECT r.bank_account_id, r.statement_date, r.statement_balance
+      FROM reconciliation r JOIN (SELECT bank_account_id, MAX(statement_date) as max_date FROM reconciliation
+          WHERE tenant_id = :t AND status = 'completed' GROUP BY bank_account_id) as m
+          ON r.bank_account_id = m.bank_account_id AND r.statement_date = m.max_date
+      WHERE r.tenant_id = :t`);
+  const statementMap = new Map(latest.map((r) => [r.bank_account_id, { statement_date: r.statement_date, statement_balance: r.statement_balance }]));
+
   for (const r of rows) {
     r.gl_balance = balances[r.account_id] || 0;
-    r.unreconciled_count = repo.scalar(`SELECT COUNT(*) c FROM bank_txn WHERE tenant_id = :t AND bank_account_id = ? AND status IN ('unmatched','matched')`, [r.id], 0);
-    r.last_statement = repo.queryOne(`SELECT statement_date, statement_balance FROM reconciliation
-        WHERE tenant_id = :t AND bank_account_id = ? AND status = 'completed' ORDER BY statement_date DESC LIMIT 1`, [r.id]);
+    r.unreconciled_count = countMap.get(r.id) || 0;
+    r.last_statement = statementMap.get(r.id) || null;
   }
   return rows;
 }
@@ -39,14 +49,21 @@ export function importStatement(repo, bankAccountId, lines, { source = 'manual' 
 
   let imported = 0, skipped = 0;
   const now = nowIso();
-  for (const l of lines) {
+
+  const linesWithIds = lines.map((l) => {
     const date = String(l.date || l.txn_date || '').slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped++; continue; }
     const amount = Money.parse(l.amount);
-    if (!amount) { skipped++; continue; }
     const externalId = l.external_id || l.id || `${date}|${amount}|${String(l.description || '').slice(0, 40)}`;
-    const dup = repo.queryOne('SELECT id FROM bank_txn WHERE tenant_id = :t AND bank_account_id = ? AND external_id = ?', [bankAccountId, externalId]);
-    if (dup) { skipped++; continue; }
+    return { l, date, amount, externalId };
+  });
+
+  const existingIds = new Set(repo.query(`SELECT external_id FROM bank_txn WHERE tenant_id = :t AND bank_account_id = ? AND external_id IN (${linesWithIds.map(() => '?').join(',')})`,
+    [bankAccountId, ...linesWithIds.map((x) => x.externalId)]).map((r) => r.external_id));
+
+  for (const { l, date, amount, externalId } of linesWithIds) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped++; continue; }
+    if (!amount) { skipped++; continue; }
+    if (existingIds.has(externalId)) { skipped++; continue; }
     repo.insert('bank_txn', {
       id: ulid(), bank_account_id: bankAccountId, txn_date: date,
       description: String(l.description || '').slice(0, 400), reference: String(l.reference || '').slice(0, 100),
@@ -58,8 +75,77 @@ export function importStatement(repo, bankAccountId, lines, { source = 'manual' 
   return { imported, skipped, total: lines.length };
 }
 
+/** Date parsing helpers for bank statements. */
+function isValidDate(y, m, d) {
+  const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+  return date.getFullYear() === parseInt(y) &&
+         date.getMonth() === parseInt(m) - 1 &&
+         date.getDate() === parseInt(d);
+}
+
+function normalizeDate(raw, dateFormat) {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    if (isValidDate(y, m, d)) return `${y}-${m}-${d}`;
+  }
+  const ymdSepMatch = trimmed.match(/^(\d{4})([/.-])(\d{1,2})\2(\d{1,2})$/);
+  if (ymdSepMatch && dateFormat === 'YMD') {
+    const [, y, , m, d] = ymdSepMatch;
+    const paddedM = m.padStart(2, '0');
+    const paddedD = d.padStart(2, '0');
+    if (isValidDate(y, paddedM, paddedD)) return `${y}-${paddedM}-${paddedD}`;
+  }
+  const sepMatch = trimmed.match(/^(\d{1,2})([/.-])(\d{1,2})\2(\d{2,4})$/);
+  if (sepMatch) {
+    let [, a, sep, b, y] = sepMatch;
+    if (y.length === 2) {
+      const century = parseInt(y) > 50 ? '19' : '20';
+      y = century + y;
+    }
+    const [dd, mm] = dateFormat === 'MDY' ? [b, a] : [a, b];
+    const paddedM = mm.padStart(2, '0');
+    const paddedD = dd.padStart(2, '0');
+    if (isValidDate(y, paddedM, paddedD)) {
+      return `${y}-${paddedM}-${paddedD}`;
+    }
+  }
+  return null;
+}
+
+function inferDateFormat(text, split) {
+  const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return null;
+  const header = split(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z]/g, ''));
+  const iDate = header.findIndex((h) => ['date', 'transactiondate', 'postingdate', 'valuedate'].includes(h));
+  if (iDate === -1) return null;
+
+  let canBeDMY = true, canBeMDY = true;
+  for (const line of lines.slice(1)) {
+    const c = split(line);
+    const raw = c[iDate];
+    if (!raw) continue;
+    const trimmed = raw.trim();
+    const sepMatch = trimmed.match(/^(\d{1,2})([/.-])(\d{1,2})\2(\d{2,4})$/);
+    if (!sepMatch) continue;
+    let [, a, sep, b, y] = sepMatch;
+    if (y.length === 2) {
+      const century = parseInt(y) > 50 ? '19' : '20';
+      y = century + y;
+    }
+    if (!isValidDate(y, b, a)) canBeDMY = false;
+    if (!isValidDate(y, a, b)) canBeMDY = false;
+  }
+  if (canBeDMY && !canBeMDY) return 'DMY';
+  if (!canBeDMY && canBeMDY) return 'MDY';
+  if (!canBeDMY && !canBeMDY) return null;
+  return 'ambiguous';
+}
+
 /** Parse a CSV statement. Header row required; column names are flexible. */
-export function parseStatementCsv(text) {
+export function parseStatementCsv(text, { dateFormat = 'DMY' } = {}) {
   const rows = [];
   const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
   if (!lines.length) return rows;
@@ -84,18 +170,19 @@ export function parseStatementCsv(text) {
   const iCredit = find('credit', 'deposit', 'paidin');
   const iRef = find('reference', 'ref', 'chequenumber');
 
+  let activeFormat = dateFormat;
+  if (dateFormat === 'auto') {
+    activeFormat = inferDateFormat(text, split);
+    if (!activeFormat || activeFormat === 'ambiguous') {
+      throw new ValidationError(`Could not determine date format from CSV. It is either ambiguous or invalid. Please specify 'DMY' or 'MDY'.`);
+    }
+  }
+
   for (const line of lines.slice(1)) {
     const c = split(line);
     if (!c.length || !c[iDate]) continue;
-    let raw = c[iDate];
-    // Accept ISO, or DD/MM/YYYY and MM/DD/YYYY when unambiguous.
-    let date = raw;
-    const m = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-    if (m) {
-      const [, a, b, y] = m;
-      const [dd, mm] = Number(a) > 12 ? [a, b] : [b, a];
-      date = `${y}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
-    }
+    const date = normalizeDate(c[iDate], activeFormat);
+    if (!date) continue;
     let amount;
     if (iAmount >= 0 && c[iAmount]) amount = c[iAmount];
     else {

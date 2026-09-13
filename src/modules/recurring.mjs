@@ -114,22 +114,24 @@ export function createRecurring(repo, input) {
     day_rule: input.day_rule || 'month_end',
     day_of_month: Number(input.day_of_month) || 1,
   };
-  repo.insert('recurring_journal', {
-    id, name: String(input.name).trim(), subsidiary_id: input.subsidiary_id,
-    currency: input.currency || gl.subsidiaryCurrency(repo, input.subsidiary_id) || 'USD',
-    memo: input.memo || '',
-    ...draft,
-    start_date: input.start_date,
-    end_date: input.end_date || null,
-    next_date: occurrenceOn(draft, input.start_date),
-    auto_reverse: input.auto_reverse ? 1 : 0,
-    occurrences: 0, max_occurrences: Number(input.max_occurrences) || 0,
-    last_run_date: null, status: input.status || 'active',
-    created_at: now, updated_at: now,
+  return repo.tx(() => {
+    repo.insert('recurring_journal', {
+      id, name: String(input.name).trim(), subsidiary_id: input.subsidiary_id,
+      currency: input.currency || gl.subsidiaryCurrency(repo, input.subsidiary_id) || 'USD',
+      memo: input.memo || '',
+      ...draft,
+      start_date: input.start_date,
+      end_date: input.end_date || null,
+      next_date: occurrenceOn(draft, input.start_date),
+      auto_reverse: input.auto_reverse ? 1 : 0,
+      occurrences: 0, max_occurrences: Number(input.max_occurrences) || 0,
+      last_run_date: null, status: input.status || 'active',
+      created_at: now, updated_at: now,
+    });
+    for (const l of lines) repo.insert('recurring_journal_line', { id: ulid(), recurring_id: id, ...l });
+    audit.record(repo, { recordType: 'recurring_journal', recordId: id, action: 'create', after: input });
+    return getRecurring(repo, id);
   });
-  for (const l of lines) repo.insert('recurring_journal_line', { id: ulid(), recurring_id: id, ...l });
-  audit.record(repo, { recordType: 'recurring_journal', recordId: id, action: 'create', after: input });
-  return getRecurring(repo, id);
 }
 
 export function updateRecurring(repo, id, patch) {
@@ -153,15 +155,17 @@ export function updateRecurring(repo, id, patch) {
     const from = before.last_run_date ? nextAfter(changes, before.last_run_date) : changes.start_date;
     changes.next_date = occurrenceOn(changes, from);
   }
-  repo.update('recurring_journal', id, changes);
+  return repo.tx(() => {
+    repo.update('recurring_journal', id, changes);
 
-  if (patch.lines !== undefined) {
-    const lines = prepareLines(repo, patch.lines);
-    repo.exec('DELETE FROM recurring_journal_line WHERE tenant_id = :t AND recurring_id = ?', [id]);
-    for (const l of lines) repo.insert('recurring_journal_line', { id: ulid(), recurring_id: id, ...l });
-  }
-  audit.record(repo, { recordType: 'recurring_journal', recordId: id, action: 'update', before, after: merged });
-  return getRecurring(repo, id);
+    if (patch.lines !== undefined) {
+      const lines = prepareLines(repo, patch.lines);
+      repo.exec('DELETE FROM recurring_journal_line WHERE tenant_id = :t AND recurring_id = ?', [id]);
+      for (const l of lines) repo.insert('recurring_journal_line', { id: ulid(), recurring_id: id, ...l });
+    }
+    audit.record(repo, { recordType: 'recurring_journal', recordId: id, action: 'update', before, after: merged });
+    return getRecurring(repo, id);
+  });
 }
 
 export function setStatus(repo, id, status) {
@@ -184,10 +188,12 @@ export function deleteRecurring(repo, id) {
   if (posted > 0 || before.occurrences > 0) {
     throw conflict(`${before.name} has posted ${posted || before.occurrences} journal ${posted === 1 ? 'entry' : 'entries'}. End it instead, so its history keeps its source.`);
   }
-  repo.exec('DELETE FROM recurring_journal_line WHERE tenant_id = :t AND recurring_id = ?', [id]);
-  repo.remove('recurring_journal', id);
-  audit.record(repo, { recordType: 'recurring_journal', recordId: id, action: 'delete', before });
-  return { ok: true, deleted: id };
+  return repo.tx(() => {
+    repo.exec('DELETE FROM recurring_journal_line WHERE tenant_id = :t AND recurring_id = ?', [id]);
+    repo.remove('recurring_journal', id);
+    audit.record(repo, { recordType: 'recurring_journal', recordId: id, action: 'delete', before });
+    return { ok: true, deleted: id };
+  });
 }
 
 // ------------------------------------------------------------------ read
@@ -238,96 +244,98 @@ export function generate(repo, { through = today(), id = null, dry_run = false }
   const templates = id ? [repo.get('recurring_journal', id)].filter(Boolean) : due(repo, { through });
   if (id && !templates.length) throw notFound('Recurring journal not found');
 
-  const posted = [];
-  const skipped = [];
-  let count = 0;
+  return repo.tx(() => {
+    const posted = [];
+    const skipped = [];
+    let count = 0;
 
-  for (const t of templates) {
-    if (t.status !== 'active') { skipped.push({ name: t.name, date: t.next_date, reason: `it is ${t.status}` }); continue; }
-    const lines = linesFor(repo, t.id);
-    if (lines.length < 2) { skipped.push({ name: t.name, date: t.next_date, reason: 'it has no balanced lines' }); continue; }
+    for (const t of templates) {
+      if (t.status !== 'active') { skipped.push({ name: t.name, date: t.next_date, reason: `it is ${t.status}` }); continue; }
+      const lines = linesFor(repo, t.id);
+      if (lines.length < 2) { skipped.push({ name: t.name, date: t.next_date, reason: 'it has no balanced lines' }); continue; }
 
-    let cursor = t.next_date;
-    let occurrences = t.occurrences;
-    let lastRun = t.last_run_date;
+      let cursor = t.next_date;
+      let occurrences = t.occurrences;
+      let lastRun = t.last_run_date;
 
-    // Guarded rather than open-ended: a template misconfigured to a daily
-    // cadence should not be able to write ten thousand entries in one run.
-    for (let guard = 0; guard < 240 && cursor <= through; guard++) {
-      if (t.end_date && cursor > t.end_date) break;
-      if (t.max_occurrences && occurrences >= t.max_occurrences) break;
+      // Guarded rather than open-ended: a template misconfigured to a daily
+      // cadence should not be able to write ten thousand entries in one run.
+      for (let guard = 0; guard < 240 && cursor <= through; guard++) {
+        if (t.end_date && cursor > t.end_date) break;
+        if (t.max_occurrences && occurrences >= t.max_occurrences) break;
 
-      const period = gl.periodForDate(repo, cursor);
-      if (!period || period.status !== 'open') {
-        skipped.push({
-          name: t.name, date: cursor,
-          reason: period ? `${period.name} is ${period.status}` : `no accounting period covers ${cursor}`,
-        });
-        break;                    // stop this template here; the rest waits
-      }
-
-      if (dry_run) {
-        posted.push({ name: t.name, date: cursor, amount: Money.toNumber(sum(lines, (l) => l.debit)), auto_reverse: !!t.auto_reverse });
-      } else {
-        const entry = gl.postJournal(repo, {
-          subsidiary_id: t.subsidiary_id, txn_date: cursor, currency: t.currency,
-          memo: t.memo ? `${t.name} — ${t.memo}` : t.name,
-          source_type: t.auto_reverse ? 'accrual' : 'recurring', source_id: t.id,
-          lines: lines.map((l) => ({
-            account_id: l.account_id, debit: l.debit, credit: l.credit, memo: l.memo,
-            department_id: l.department_id, class_id: l.class_id,
-            entity_type: l.entity_type, entity_id: l.entity_id,
-          })),
-        });
-        repo.update('journal_entry', entry.id, { recurring_id: t.id });
-
-        // An accrual unwinds on the first day of the next period, which is
-        // the whole point of marking it as one.
-        let reversal = null;
-        const reverseOn = addDays(cursor, 1);
-        if (t.auto_reverse) {
-          const rp = gl.periodForDate(repo, reverseOn);
-          if (rp && rp.status === 'open') {
-            reversal = gl.reverseJournal(repo, entry.id, { date: reverseOn, memo: `Reversal of accrual ${t.name}` });
-            repo.update('journal_entry', reversal.id, { recurring_id: t.id });
-          } else {
-            skipped.push({
-              name: t.name, date: reverseOn,
-              reason: `the accrual posted, but its reversal cannot: ${rp ? `${rp.name} is ${rp.status}` : `no period covers ${reverseOn}`}`,
-            });
-          }
+        const period = gl.periodForDate(repo, cursor);
+        if (!period || period.status !== 'open') {
+          skipped.push({
+            name: t.name, date: cursor,
+            reason: period ? `${period.name} is ${period.status}` : `no accounting period covers ${cursor}`,
+          });
+          break;                    // stop this template here; the rest waits
         }
-        posted.push({
-          name: t.name, date: cursor, entry_no: entry.entry_no, entry_id: entry.id,
-          amount: Money.toNumber(sum(lines, (l) => l.debit)),
-          reversal_no: reversal?.entry_no || null,
-        });
+
+        if (dry_run) {
+          posted.push({ name: t.name, date: cursor, amount: Money.toNumber(sum(lines, (l) => l.debit)), auto_reverse: !!t.auto_reverse });
+        } else {
+          const entry = gl.postJournal(repo, {
+            subsidiary_id: t.subsidiary_id, txn_date: cursor, currency: t.currency,
+            memo: t.memo ? `${t.name} — ${t.memo}` : t.name,
+            source_type: t.auto_reverse ? 'accrual' : 'recurring', source_id: t.id,
+            lines: lines.map((l) => ({
+              account_id: l.account_id, debit: l.debit, credit: l.credit, memo: l.memo,
+              department_id: l.department_id, class_id: l.class_id,
+              entity_type: l.entity_type, entity_id: l.entity_id,
+            })),
+          });
+          repo.update('journal_entry', entry.id, { recurring_id: t.id });
+
+          // An accrual unwinds on the first day of the next period, which is
+          // the whole point of marking it as one.
+          let reversal = null;
+          const reverseOn = addDays(cursor, 1);
+          if (t.auto_reverse) {
+            const rp = gl.periodForDate(repo, reverseOn);
+            if (rp && rp.status === 'open') {
+              reversal = gl.reverseJournal(repo, entry.id, { date: reverseOn, memo: `Reversal of accrual ${t.name}` });
+              repo.update('journal_entry', reversal.id, { recurring_id: t.id });
+            } else {
+              skipped.push({
+                name: t.name, date: reverseOn,
+                reason: `the accrual posted, but its reversal cannot: ${rp ? `${rp.name} is ${rp.status}` : `no period covers ${reverseOn}`}`,
+              });
+            }
+          }
+          posted.push({
+            name: t.name, date: cursor, entry_no: entry.entry_no, entry_id: entry.id,
+            amount: Money.toNumber(sum(lines, (l) => l.debit)),
+            reversal_no: reversal?.entry_no || null,
+          });
+        }
+
+        count++;
+        occurrences++;
+        lastRun = cursor;
+        cursor = nextAfter(t, cursor);
       }
 
-      count++;
-      occurrences++;
-      lastRun = cursor;
-      cursor = nextAfter(t, cursor);
+      if (!dry_run && lastRun !== t.last_run_date) {
+        const ended = (t.end_date && cursor > t.end_date) || (t.max_occurrences && occurrences >= t.max_occurrences);
+        repo.update('recurring_journal', t.id, {
+          next_date: cursor, occurrences, last_run_date: lastRun,
+          status: ended ? 'ended' : t.status, updated_at: nowIso(),
+        });
+      }
     }
 
-    if (!dry_run && lastRun !== t.last_run_date) {
-      const ended = (t.end_date && cursor > t.end_date) || (t.max_occurrences && occurrences >= t.max_occurrences);
-      repo.update('recurring_journal', t.id, {
-        next_date: cursor, occurrences, last_run_date: lastRun,
-        status: ended ? 'ended' : t.status, updated_at: nowIso(),
+    if (!dry_run && posted.length) {
+      audit.record(repo, {
+        recordType: 'recurring_journal', recordId: id, action: 'generate',
+        changes: { through: { from: null, to: through }, entries: { from: 0, to: posted.length } },
       });
     }
-  }
-
-  if (!dry_run && posted.length) {
-    audit.record(repo, {
-      recordType: 'recurring_journal', recordId: id, action: 'generate',
-      changes: { through: { from: null, to: through }, entries: { from: 0, to: posted.length } },
-    });
-  }
-  return {
-    through, dry_run: !!dry_run, generated: count,
-    amount: posted.reduce((a, p) => a + p.amount, 0),
-    posted, skipped,
-  };
+    return {
+      through, dry_run: !!dry_run, generated: count,
+      amount: posted.reduce((a, p) => a + p.amount, 0),
+      posted, skipped,
+    };
+  });
 }

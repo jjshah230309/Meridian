@@ -65,7 +65,9 @@ function controlBar({ from, to, asOf, onChange, extra = [], onPrint = true, expo
   for (const el of [from, to, asOf]) el?.addEventListener('change', onChange);
   return h('div.toolbar.no-print', ...bits, ...extra,
     h('div.spacer'),
-    exportFn && h('button.btn.sm', { onclick: exportFn }, icon('download', { size: 13 }), 'CSV'),
+    exportFn && h('div.row', { style: { gap: '4px' } },
+      h('button.btn.sm', { onclick: () => exportFn('csv') }, icon('download', { size: 13 }), 'CSV'),
+      h('button.btn.sm', { onclick: () => exportFn('pdf') }, 'PDF')),
     onPrint && h('button.btn.sm', { onclick: () => window.print() }, icon('printer', { size: 13 }), 'Print'));
 }
 
@@ -182,6 +184,7 @@ async function incomeStatement({ go }) {
   return reportPage('Income Statement', 'Profit and loss for the selected period',
     controlBar({
       from, to, onChange: load,
+      exportFn: (format) => API.exportPack(format).catch(notifyError),
       extra: [
         ...(book.el || []),
         h('label', { style: { display: 'flex', gap: '5px', alignItems: 'center', fontSize: '12.5px' } }, compare, 'Compare to prior period'),
@@ -252,7 +255,7 @@ async function balanceSheet({ go }) {
 
   await load();
   return reportPage('Balance Sheet', 'Financial position as at a date',
-    controlBar({ asOf, onChange: load, extra: book.el || [] }), host);
+    controlBar({ asOf, onChange: load, exportFn: (format) => API.exportPack(format).catch(notifyError), extra: book.el || [] }), host);
 }
 
 // ----------------------------------------------------------- cash flow
@@ -287,7 +290,7 @@ async function cashFlow() {
   }
 
   await load();
-  return reportPage('Cash Flow', 'Indirect method', controlBar({ from, to, onChange: load }), host);
+  return reportPage('Cash Flow', 'Indirect method', controlBar({ from, to, onChange: load, exportFn: (format) => API.exportPack(format).catch(notifyError) }), host);
 }
 
 // ------------------------------------------------------- trial balance
@@ -316,7 +319,7 @@ async function trialBalance({ go }) {
   }
   await load();
   return reportPage('Trial Balance', 'Every account carrying a balance',
-    controlBar({ asOf: to, onChange: load, extra: book.el || [] }), host);
+    controlBar({ asOf: to, onChange: load, exportFn: (format) => API.exportPack(format).catch(notifyError), extra: book.el || [] }), host);
 }
 
 // ---------------------------------------------------------------- aging
@@ -355,7 +358,7 @@ async function agingReport(endpoint, title, entityType, { go }) {
   }
   await load();
   return reportPage(title, 'Click a row to reveal the underlying documents',
-    controlBar({ asOf, onChange: load, exportFn: () => API.exportCsv(entityType === 'customer' ? 'invoice' : 'vendor_bill').catch(notifyError) }), host);
+    controlBar({ asOf, onChange: load, exportFn: (format) => API.exportFile(entityType === 'customer' ? 'invoice' : 'vendor_bill', format).catch(notifyError) }), host);
 }
 
 // --------------------------------------------------- inventory valuation
@@ -381,7 +384,7 @@ async function inventoryValuation({ go }) {
           h('td.num', fmt.qty(r.total_qty)), h('td', ''), h('td.num', fmt.money(r.total_value)))))));
   }
   await load();
-  return reportPage('Inventory Valuation', 'On-hand stock at moving-average cost', controlBar({ asOf, onChange: load }), host);
+  return reportPage('Inventory Valuation', 'On-hand stock at moving-average cost', controlBar({ asOf, onChange: load, exportFn: (format) => API.exportFile('item', format).catch(notifyError) }), host);
 }
 
 // ------------------------------------------------------- sales analysis
@@ -505,6 +508,7 @@ async function auditReport({ go }) {
   return reportPage('Audit Trail', 'Every mutation, immutable and attributable',
     controlBar({
       from, to, onChange: load,
+      exportFn: (format) => API.exportFile('audit_event', format).catch(notifyError),
       extra: [actionSel, h('label', { style: { display: 'flex', gap: '5px', alignItems: 'center', fontSize: '12.5px' } }, financialOnly, 'Financial only')],
     }), host);
 }

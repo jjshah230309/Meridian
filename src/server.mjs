@@ -20,6 +20,7 @@ import { nowIso } from './core/util.mjs';
 import { buildApi } from './api.mjs';
 import * as appconfig from './core/appconfig.mjs';
 import * as desktop from './core/desktop.mjs';
+import { logger } from './core/logger.mjs';
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -289,9 +290,9 @@ export function createServer(config, db) {
     } catch (err) {
       const status = err.status || 500;
       if (status >= 500) {
-        console.error(`[${nowIso()}] ${requestId} ${req.method} ${pathname} →`, err);
+        logger.error(`${requestId} ${req.method} ${pathname} →`, err);
       } else if (config.dev) {
-        console.warn(`[${nowIso()}] ${requestId} ${req.method} ${pathname} → ${status} ${err.message}`);
+        logger.warn(`${requestId} ${req.method} ${pathname} → ${status} ${err.message}`);
       }
       return httpx.sendError(res, err, { exposeStack: config.dev, requestId });
     } finally {

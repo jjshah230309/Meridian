@@ -244,16 +244,34 @@ const OPS = {
     const refs = findAll(args, 'recordRef').concat(findAll(args, 'baseRef'));
     if (!refs.length) throw new HttpError(400, 'getList needs at least one recordRef');
     if (refs.length > 200) throw new HttpError(400, 'getList accepts at most 200 references at a time');
-    const out = [];
+
+    const byType = new Map();
     for (const ref of refs) {
       const type = typeOf(ref);
+      if (!byType.has(type)) byType.set(type, []);
+      byType.get(type).push(internalIdOf(ref));
+    }
+
+    const rowsMap = new Map();
+    for (const [type, ids] of byType) {
       const m = meta.getMeta(type);
       rbac.require$(ctx.access, m.permission, LEVEL.VIEW);
-      const row = ctx.repo.get(m.table, internalIdOf(ref));
-      out.push(row
-        ? raw('readResponse', null, statusOk() + recordXml(type, row))
-        : raw('readResponse', null, statusFail('RCRD_DSNT_EXIST', `${m.label} ${internalIdOf(ref)} was not found`)));
+      const rows = ctx.repo.query(`SELECT * FROM ${m.table} WHERE tenant_id = :t AND id IN (${ids.map(() => '?').join(',')})`, ids);
+      for (const row of rows) {
+        rowsMap.set(`${type}:${row.id}`, row);
+      }
     }
+
+    const out = refs.map((ref) => {
+      const type = typeOf(ref);
+      const m = meta.getMeta(type);
+      const id = internalIdOf(ref);
+      const row = rowsMap.get(`${type}:${id}`);
+      return row
+        ? raw('readResponse', null, statusOk() + recordXml(type, row))
+        : raw('readResponse', null, statusFail('RCRD_DSNT_EXIST', `${m.label} ${id} was not found`));
+    });
+
     return response('getList', statusOk() + el('totalRecords', null, String(out.length)) + raw('recordList', null, out.join('')));
   },
 

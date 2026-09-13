@@ -100,58 +100,60 @@ export function addLandedCost(repo, txnId, input = {}) {
   const clearing = category.account_id || acc.cogs;
   if (!clearing) throw unprocessable('No account is set on that landed cost category, and no default cost account is configured.');
 
-  const id = ulid();
-  const journalLines = [];
-  const detail = [];
-  lines.forEach((l, i) => {
-    const share = shares[i];
-    if (!share) return;
-    // Move the stock first: it fixes the unit cost the ledger has to match.
-    const moved = inv.moveStock(repo, {
-      item_id: l.item_id, location_id: l.location_id || txn.location_id,
-      qty_delta: 0, value_delta: share, unit_cost: null,
-      type: 'landed_cost', source_type: 'landed_cost', source_id: id,
-      txn_date: input.txn_date || txn.txn_date, memo: `${category.name} on ${txn.txn_no}`,
+  return repo.tx(() => {
+    const id = ulid();
+    const journalLines = [];
+    const detail = [];
+    lines.forEach((l, i) => {
+      const share = shares[i];
+      if (!share) return;
+      // Move the stock first: it fixes the unit cost the ledger has to match.
+      const moved = inv.moveStock(repo, {
+        item_id: l.item_id, location_id: l.location_id || txn.location_id,
+        qty_delta: 0, value_delta: share, unit_cost: null,
+        type: 'landed_cost', source_type: 'landed_cost', source_id: id,
+        txn_date: input.txn_date || txn.txn_date, memo: `${category.name} on ${txn.txn_no}`,
+      });
+      void moved;
+      const item = repo.get('item', l.item_id);
+      journalLines.push({
+        account_id: item?.asset_account_id || acc.inventory, debit: share, credit: 0,
+        item_id: l.item_id, location_id: l.location_id || txn.location_id,
+        memo: `${category.name} — ${l.sku}`,
+      });
+      detail.push({
+        id: ulid(), landed_cost_id: id, txn_line_id: l.id, item_id: l.item_id,
+        location_id: l.location_id || txn.location_id, basis: bases[i], amount: share,
+      });
     });
-    void moved;
-    const item = repo.get('item', l.item_id);
-    journalLines.push({
-      account_id: item?.asset_account_id || acc.inventory, debit: share, credit: 0,
-      item_id: l.item_id, location_id: l.location_id || txn.location_id,
-      memo: `${category.name} — ${l.sku}`,
+    journalLines.push({ account_id: clearing, debit: 0, credit: amount, memo: `${category.name} on ${txn.txn_no}` });
+
+    const entry = gl.postJournal(repo, {
+      subsidiary_id: txn.subsidiary_id, txn_date: input.txn_date || txn.txn_date,
+      memo: `Landed cost ${METHOD_LABEL[method]} — ${category.name} on ${txn.txn_no}`,
+      source_type: 'landed_cost', source_id: id, lines: journalLines,
     });
-    detail.push({
-      id: ulid(), landed_cost_id: id, txn_line_id: l.id, item_id: l.item_id,
-      location_id: l.location_id || txn.location_id, basis: bases[i], amount: share,
+    void period;
+
+    repo.insert('landed_cost', {
+      id, txn_id: txnId, category_id: category.id, method, amount,
+      currency: txn.currency, vendor_id: input.vendor_id || null,
+      reference: input.reference || '', entry_id: entry.id, applied_at: nowIso(),
+      created_at: nowIso(), created_by: repo.ctx?.user?.id || null,
     });
-  });
-  journalLines.push({ account_id: clearing, debit: 0, credit: amount, memo: `${category.name} on ${txn.txn_no}` });
+    for (const d of detail) repo.insert('landed_cost_line', d);
 
-  const entry = gl.postJournal(repo, {
-    subsidiary_id: txn.subsidiary_id, txn_date: input.txn_date || txn.txn_date,
-    memo: `Landed cost ${METHOD_LABEL[method]} — ${category.name} on ${txn.txn_no}`,
-    source_type: 'landed_cost', source_id: id, lines: journalLines,
+    audit.record(repo, {
+      recordType: 'txn', recordId: txnId, action: 'landed_cost',
+      changes: {
+        category: { from: null, to: category.name },
+        amount: { from: null, to: Money.toNumber(amount) },
+        spread: { from: null, to: METHOD_LABEL[method] },
+        entry: { from: null, to: entry.entry_no },
+      },
+    });
+    return getLandedCost(repo, id);
   });
-  void period;
-
-  repo.insert('landed_cost', {
-    id, txn_id: txnId, category_id: category.id, method, amount,
-    currency: txn.currency, vendor_id: input.vendor_id || null,
-    reference: input.reference || '', entry_id: entry.id, applied_at: nowIso(),
-    created_at: nowIso(), created_by: repo.ctx?.user?.id || null,
-  });
-  for (const d of detail) repo.insert('landed_cost_line', d);
-
-  audit.record(repo, {
-    recordType: 'txn', recordId: txnId, action: 'landed_cost',
-    changes: {
-      category: { from: null, to: category.name },
-      amount: { from: null, to: Money.toNumber(amount) },
-      spread: { from: null, to: METHOD_LABEL[method] },
-      entry: { from: null, to: entry.entry_no },
-    },
-  });
-  return getLandedCost(repo, id);
 }
 
 export function getLandedCost(repo, id) {
@@ -236,28 +238,30 @@ export function openCount(repo, input = {}) {
   if (!rows.length) throw unprocessable(`Nothing stocked at ${location.name} matches that scope.`);
 
   const now = nowIso();
-  const id = ulid();
-  repo.insert('inventory_count', {
-    id, count_no: nextNumber(repo, 'inventory_count'), location_id: input.location_id,
-    subsidiary_id: input.subsidiary_id || location.subsidiary_id,
-    name: input.name || `${scope === 'cycle' ? 'Cycle count' : 'Stock count'} — ${location.name}`,
-    scope, category: input.category || '', count_date: countDate, status: 'open',
-    line_count: rows.length, counted_count: 0, variance_qty: 0, variance_value: 0,
-    adjustment_txn_id: null, notes: input.notes || '',
-    created_at: now, created_by: repo.ctx?.user?.id || null,
-  });
-  for (const r of rows) {
-    repo.insert('inventory_count_line', {
-      id: ulid(), count_id: id, item_id: r.item_id, bin: r.bin || '',
-      expected_qty: r.qty_on_hand || 0, counted_qty: null, unit_cost: r.avg_cost || 0,
-      variance_qty: 0, variance_value: 0, note: '', counted_at: null, counted_by: null,
+  return repo.tx(() => {
+    const id = ulid();
+    repo.insert('inventory_count', {
+      id, count_no: nextNumber(repo, 'inventory_count'), location_id: input.location_id,
+      subsidiary_id: input.subsidiary_id || location.subsidiary_id,
+      name: input.name || `${scope === 'cycle' ? 'Cycle count' : 'Stock count'} — ${location.name}`,
+      scope, category: input.category || '', count_date: countDate, status: 'open',
+      line_count: rows.length, counted_count: 0, variance_qty: 0, variance_value: 0,
+      adjustment_txn_id: null, notes: input.notes || '',
+      created_at: now, created_by: repo.ctx?.user?.id || null,
     });
-  }
-  audit.record(repo, {
-    recordType: 'inventory_count', recordId: id, action: 'open',
-    changes: { location: { from: null, to: location.name }, lines: { from: 0, to: rows.length } },
+    for (const r of rows) {
+      repo.insert('inventory_count_line', {
+        id: ulid(), count_id: id, item_id: r.item_id, bin: r.bin || '',
+        expected_qty: r.qty_on_hand || 0, counted_qty: null, unit_cost: r.avg_cost || 0,
+        variance_qty: 0, variance_value: 0, note: '', counted_at: null, counted_by: null,
+      });
+    }
+    audit.record(repo, {
+      recordType: 'inventory_count', recordId: id, action: 'open',
+      changes: { location: { from: null, to: location.name }, lines: { from: 0, to: rows.length } },
+    });
+    return getCount(repo, id);
   });
-  return getCount(repo, id);
 }
 
 export function getCount(repo, id) {
@@ -310,14 +314,16 @@ export function enterCounts(repo, id, lines) {
 
   const now = nowIso();
   const by = repo.ctx?.user?.id || null;
-  for (const u of updates) {
-    repo.update('inventory_count_line', u.id, {
-      counted_qty: u.counted_qty, variance_qty: u.variance_qty, variance_value: u.variance_value,
-      note: u.note, counted_at: u.counted_qty === null ? null : now, counted_by: u.counted_qty === null ? null : by,
-    });
-  }
-  retotal(repo, id);
-  return getCount(repo, id);
+  return repo.tx(() => {
+    for (const u of updates) {
+      repo.update('inventory_count_line', u.id, {
+        counted_qty: u.counted_qty, variance_qty: u.variance_qty, variance_value: u.variance_value,
+        note: u.note, counted_at: u.counted_qty === null ? null : now, counted_by: u.counted_qty === null ? null : by,
+      });
+    }
+    retotal(repo, id);
+    return getCount(repo, id);
+  });
 }
 
 function retotal(repo, id) {
@@ -350,45 +356,47 @@ export function postCount(repo, id, { txn_date = null, memo = '' } = {}) {
   if (!isValidDate(date)) throw new ValidationError({ txn_date: 'Enter a valid date' });
   gl.requireOpenPeriod(repo, date);
 
-  let adjustment = null;
-  if (varied.length) {
-    // Deliberately routed through the ordinary adjustment document: a count
-    // that posted its own private journal would be invisible to every stock
-    // report that knows what an adjustment is.
-    adjustment = T.createTxn(repo, 'INVENTORY_ADJUSTMENT', {
-      subsidiary_id: count.subsidiary_id, location_id: count.location_id, txn_date: date,
-      memo: memo || `${count.count_no} — stock count at ${count.location?.name || 'location'}`,
-      reference: count.count_no,
-      lines: varied.map((l) => ({
-        item_id: l.item_id, quantity: Qty.toNumber(l.variance_qty),
-        unit_cost: Money.toNumber(l.unit_cost), description: `Counted ${Qty.toNumber(l.counted_qty)}, expected ${Qty.toNumber(l.expected_qty)}`,
-      })),
+  return repo.tx(() => {
+    let adjustment = null;
+    if (varied.length) {
+      // Deliberately routed through the ordinary adjustment document: a count
+      // that posted its own private journal would be invisible to every stock
+      // report that knows what an adjustment is.
+      adjustment = T.createTxn(repo, 'INVENTORY_ADJUSTMENT', {
+        subsidiary_id: count.subsidiary_id, location_id: count.location_id, txn_date: date,
+        memo: memo || `${count.count_no} — stock count at ${count.location?.name || 'location'}`,
+        reference: count.count_no,
+        lines: varied.map((l) => ({
+          item_id: l.item_id, quantity: Qty.toNumber(l.variance_qty),
+          unit_cost: Money.toNumber(l.unit_cost), description: `Counted ${Qty.toNumber(l.counted_qty)}, expected ${Qty.toNumber(l.expected_qty)}`,
+        })),
+      });
+    }
+
+    const now = nowIso();
+    repo.update('inventory_count', id, {
+      status: 'posted', adjustment_txn_id: adjustment?.id || null,
+      posted_at: now, posted_by: repo.ctx?.user?.id || null,
     });
-  }
+    // Remember when each line was last counted, which is what a cycle count
+    // orders by so the same shelf is not counted every month.
+    for (const l of count.lines) {
+      if (l.counted_qty === null) continue;
+      repo.exec('UPDATE item_location SET last_count_at = ? WHERE tenant_id = :t AND item_id = ? AND location_id = ?',
+        [date, l.item_id, count.location_id]);
+    }
 
-  const now = nowIso();
-  repo.update('inventory_count', id, {
-    status: 'posted', adjustment_txn_id: adjustment?.id || null,
-    posted_at: now, posted_by: repo.ctx?.user?.id || null,
+    audit.record(repo, {
+      recordType: 'inventory_count', recordId: id, action: 'post',
+      changes: {
+        lines: { from: null, to: count.lines.length },
+        variances: { from: null, to: varied.length },
+        value: { from: null, to: Money.toNumber(count.variance_value) },
+        adjustment: { from: null, to: adjustment?.txn_no || 'none needed' },
+      },
+    });
+    return { count: getCount(repo, id), adjustment, variances: varied.length, uncounted: uncounted.length };
   });
-  // Remember when each line was last counted, which is what a cycle count
-  // orders by so the same shelf is not counted every month.
-  for (const l of count.lines) {
-    if (l.counted_qty === null) continue;
-    repo.exec('UPDATE item_location SET last_count_at = ? WHERE tenant_id = :t AND item_id = ? AND location_id = ?',
-      [date, l.item_id, count.location_id]);
-  }
-
-  audit.record(repo, {
-    recordType: 'inventory_count', recordId: id, action: 'post',
-    changes: {
-      lines: { from: null, to: count.lines.length },
-      variances: { from: null, to: varied.length },
-      value: { from: null, to: Money.toNumber(count.variance_value) },
-      adjustment: { from: null, to: adjustment?.txn_no || 'none needed' },
-    },
-  });
-  return { count: getCount(repo, id), adjustment, variances: varied.length, uncounted: uncounted.length };
 }
 
 export function cancelCount(repo, id, { reason = '' } = {}) {

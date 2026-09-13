@@ -837,7 +837,9 @@ export function buildApi({ config }) {
   });
   r.post(`${P}/bank/:id/import`, async (ctx) => {
     rbac.require$(ctx.access, 'bank_txn', LEVEL.CREATE);
-    const lines = typeof ctx.body === 'string' ? bank.parseStatementCsv(ctx.body) : (ctx.body?.lines || bank.parseStatementCsv(ctx.body?.csv || ''));
+    const ba = ctx.repo.get('bank_account', ctx.params.id);
+    if (!ba) throw notFound('Bank account not found');
+    const lines = typeof ctx.body === 'string' ? bank.parseStatementCsv(ctx.body, { dateFormat: ba.date_format }) : (ctx.body?.lines || bank.parseStatementCsv(ctx.body?.csv || '', { dateFormat: ba.date_format }));
     return ctx.tx(() => bank.importStatement(ctx.repo, ctx.params.id, lines, { source: ctx.body?.source || 'upload' }));
   });
   r.get(`${P}/bank/:id/suggest`, async (ctx) => { rbac.require$(ctx.access, 'bank_txn', LEVEL.VIEW); return bank.suggestMatches(ctx.repo, ctx.params.id, { autoApply: false }); });

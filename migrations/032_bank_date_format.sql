@@ -1,0 +1,1 @@
+ALTER TABLE bank_account ADD COLUMN date_format TEXT DEFAULT 'DMY';

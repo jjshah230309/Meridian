@@ -27,18 +27,20 @@ export function createBin(repo, input) {
     throw new ValidationError({ code: `Bin ${input.code} already exists at this location` });
   }
   const id = ulid();
-  repo.insert('bin', {
-    id, location_id: input.location_id, code: input.code,
-    zone: input.zone || '', bin_type: input.bin_type || 'storage',
-    pick_sequence: Number(input.pick_sequence || 0),
-    capacity: Qty.parse(input.capacity || 0),
-    active: input.active === false ? 0 : 1, created_at: nowIso(),
+  return repo.tx(() => {
+    repo.insert('bin', {
+      id, location_id: input.location_id, code: input.code,
+      zone: input.zone || '', bin_type: input.bin_type || 'storage',
+      pick_sequence: Number(input.pick_sequence || 0),
+      capacity: Qty.parse(input.capacity || 0),
+      active: input.active === false ? 0 : 1, created_at: nowIso(),
+    });
+    // Racking a location is the decision to run it on bins; nobody should have
+    // to find a separate checkbox afterwards to make put-away and bin counts
+    // work, so the first bin turns the location over.
+    repo.update('location', input.location_id, { uses_bins: 1 });
+    return repo.get('bin', id);
   });
-  // Racking a location is the decision to run it on bins; nobody should have
-  // to find a separate checkbox afterwards to make put-away and bin counts
-  // work, so the first bin turns the location over.
-  repo.update('location', input.location_id, { uses_bins: 1 });
-  return repo.get('bin', id);
 }
 
 export const binsFor = (repo, locationId) =>
@@ -124,27 +126,47 @@ export function generatePutaway(repo, receiptTxnId) {
   if (!location?.uses_bins) throw unprocessable('That location does not use bins');
 
   const lines = repo.query('SELECT * FROM txn_line WHERE tenant_id = :t AND txn_id = ? ORDER BY line_no', [receiptTxnId]);
-  const created = [];
-  for (const l of lines) {
-    if (!l.item_id || !l.quantity) continue;
-    const item = repo.get('item', l.item_id);
-    if (!inv.isStocked(item)) continue;
-    // Put stock where the same item already lives, else the first storage bin.
-    const existing = binsHolding(repo, l.item_id, receipt.location_id)[0];
-    const fallback = repo.queryOne(
-      "SELECT * FROM bin WHERE tenant_id = :t AND location_id = ? AND bin_type = 'storage' AND active = 1 ORDER BY pick_sequence LIMIT 1",
-      [receipt.location_id]);
-    const id = ulid();
-    repo.insert('putaway_task', {
-      id, receipt_txn_id: receiptTxnId, item_id: l.item_id,
-      from_bin_id: location.default_receiving_bin_id || null,
-      to_bin_id: existing?.bin_id || fallback?.id || null,
-      quantity: l.quantity, lot_number: '', status: 'pending',
-      completed_by: null, completed_at: null, created_at: nowIso(),
-    });
-    created.push(id);
+  const itemIds = [...new Set(lines.map((l) => l.item_id).filter(Boolean))];
+  const itemMap = new Map(repo.find('item', { where: { id: itemIds } }).map((i) => [i.id, i]));
+
+  const fallback = repo.queryOne(
+    "SELECT * FROM bin WHERE tenant_id = :t AND location_id = ? AND bin_type = 'storage' AND active = 1 ORDER BY pick_sequence LIMIT 1",
+    [receipt.location_id]);
+
+  const allBins = itemIds.length
+    ? repo.query(`SELECT bq.*, b.code, b.zone, b.bin_type, b.pick_sequence, b.location_id
+      FROM bin_quantity bq JOIN bin b ON b.tenant_id = bq.tenant_id AND b.id = bq.bin_id
+      WHERE bq.tenant_id = :t AND bq.item_id IN (${itemIds.map(() => '?').join(',')}) AND bq.quantity > 0
+        AND b.location_id = ?
+      ORDER BY CASE b.bin_type WHEN 'picking' THEN 0 ELSE 1 END, b.pick_sequence, b.code`,
+      [...itemIds, receipt.location_id])
+    : [];
+  const binMap = new Map();
+  for (const b of allBins) {
+    if (!binMap.has(b.item_id)) binMap.set(b.item_id, []);
+    binMap.get(b.item_id).push(b);
   }
-  return { receipt: receipt.txn_no, tasks: created.length };
+
+  return repo.tx(() => {
+    const created = [];
+    for (const l of lines) {
+      if (!l.item_id || !l.quantity) continue;
+      const item = itemMap.get(l.item_id);
+      if (!item || !inv.isStocked(item)) continue;
+      // Put stock where the same item already lives, else the first storage bin.
+      const existing = binMap.get(l.item_id)?.[0];
+      const id = ulid();
+      repo.insert('putaway_task', {
+        id, receipt_txn_id: receiptTxnId, item_id: l.item_id,
+        from_bin_id: location.default_receiving_bin_id || null,
+        to_bin_id: existing?.bin_id || fallback?.id || null,
+        quantity: l.quantity, lot_number: '', status: 'pending',
+        completed_by: null, completed_at: null, created_at: nowIso(),
+      });
+      created.push(id);
+    }
+    return { receipt: receipt.txn_no, tasks: created.length };
+  });
 }
 
 export function completePutaway(repo, taskId, { to_bin_id = null, quantity = null, by = null } = {}) {
@@ -155,9 +177,11 @@ export function completePutaway(repo, taskId, { to_bin_id = null, quantity = nul
   if (!bin) throw new ValidationError({ to_bin_id: 'A destination bin is required' });
   const qty = quantity === null ? task.quantity : Qty.parse(quantity);
 
-  moveBin(repo, { item_id: task.item_id, from_bin_id: task.from_bin_id, to_bin_id: bin, quantity: Qty.toNumber(qty), lot_number: task.lot_number });
-  repo.update('putaway_task', taskId, { status: 'complete', to_bin_id: bin, completed_by: by, completed_at: nowIso() });
-  return repo.get('putaway_task', taskId);
+  return repo.tx(() => {
+    moveBin(repo, { item_id: task.item_id, from_bin_id: task.from_bin_id, to_bin_id: bin, quantity: Qty.toNumber(qty), lot_number: task.lot_number });
+    repo.update('putaway_task', taskId, { status: 'complete', to_bin_id: bin, completed_by: by, completed_at: nowIso() });
+    return repo.get('putaway_task', taskId);
+  });
 }
 
 // ----------------------------------------------------------------- waves
@@ -191,59 +215,91 @@ export function createWave(repo, { location_id, txn_ids = [], strategy = 'batch'
   if (!orders.length) throw unprocessable('No open sales orders to pick at that location');
 
   const id = ulid();
-  repo.insert('pick_wave', {
-    id, wave_no: nextNumber(repo, 'pick_wave'), location_id,
-    status: 'open', strategy, assigned_to,
-    order_count: orders.length, line_count: 0,
-    released_at: null, completed_at: null, created_at: nowIso(),
-  });
 
-  let lineCount = 0;
-  for (const order of orders) {
-    const lines = repo.query('SELECT * FROM txn_line WHERE tenant_id = :t AND txn_id = ? ORDER BY line_no', [order.id]);
-    for (const l of lines) {
-      if (!l.item_id) continue;
-      const item = repo.get('item', l.item_id);
-      if (!inv.isStocked(item)) continue;
-      let outstanding = Math.max(0, (l.quantity || 0) - (l.qty_fulfilled || 0));
-      if (outstanding <= 0) continue;
+  const orderIds = orders.map((o) => o.id);
+  const allLines = repo.query(`SELECT * FROM txn_line WHERE tenant_id = :t AND txn_id IN (${orderIds.map(() => '?').join(',')}) ORDER BY txn_id, line_no`, orderIds);
+  const linesByOrder = new Map();
+  for (const l of allLines) {
+    if (!linesByOrder.has(l.txn_id)) linesByOrder.set(l.txn_id, []);
+    linesByOrder.get(l.txn_id).push(l);
+  }
 
-      // Split the pick across bins, nearest first, so the picker is told
-      // exactly where to go rather than "somewhere in the warehouse".
-      const sources = binsHolding(repo, l.item_id, location_id);
-      if (!sources.length) {
-        repo.insert('pick_task', {
-          id: ulid(), wave_id: id, txn_id: order.id, txn_line_id: l.id,
-          item_id: l.item_id, bin_id: null, lot_number: '',
-          quantity: outstanding, quantity_picked: 0, pick_sequence: 999999,
-          status: 'pending', picked_by: null, picked_at: null,
-        });
-        lineCount++;
-        continue;
-      }
-      for (const src of sources) {
-        if (outstanding <= 0) break;
-        const free = Math.max(0, src.quantity - src.allocated);
-        if (free <= 0) continue;
-        const take = Math.min(free, outstanding);
-        repo.insert('pick_task', {
-          id: ulid(), wave_id: id, txn_id: order.id, txn_line_id: l.id,
-          item_id: l.item_id, bin_id: src.bin_id, lot_number: src.lot_number || '',
-          quantity: take, quantity_picked: 0, pick_sequence: src.pick_sequence || 0,
-          status: 'pending', picked_by: null, picked_at: null,
-        });
-        repo.exec(
-          `UPDATE bin_quantity SET allocated = allocated + ?
-           WHERE tenant_id = :t AND bin_id = ? AND item_id = ? AND lot_number = ? AND serial_no = ?`,
-          [take, src.bin_id, l.item_id, src.lot_number || '', src.serial_no || '']);
-        outstanding -= take;
-        lineCount++;
+  const itemIds = [...new Set(allLines.map((l) => l.item_id).filter(Boolean))];
+  const itemMap = new Map(repo.find('item', { where: { id: itemIds } }).map((i) => [i.id, i]));
+
+  const allBins = itemIds.length
+    ? repo.query(`SELECT bq.*, b.code, b.zone, b.bin_type, b.pick_sequence, b.location_id
+      FROM bin_quantity bq JOIN bin b ON b.tenant_id = bq.tenant_id AND b.id = bq.bin_id
+      WHERE bq.tenant_id = :t AND bq.item_id IN (${itemIds.map(() => '?').join(',')}) AND bq.quantity > 0
+        AND b.location_id = ?
+      ORDER BY CASE b.bin_type WHEN 'picking' THEN 0 ELSE 1 END, b.pick_sequence, b.code`,
+      [...itemIds, location_id])
+    : [];
+  const binMap = new Map();
+  for (const b of allBins) {
+    if (!binMap.has(b.item_id)) binMap.set(b.item_id, []);
+    binMap.get(b.item_id).push(b);
+  }
+
+  return repo.tx(() => {
+    repo.insert('pick_wave', {
+      id, wave_no: nextNumber(repo, 'pick_wave'), location_id,
+      status: 'open', strategy, assigned_to,
+      order_count: orders.length, line_count: 0,
+      released_at: null, completed_at: null, created_at: nowIso(),
+    });
+
+    let lineCount = 0;
+    for (const order of orders) {
+      const lines = linesByOrder.get(order.id) || [];
+      for (const l of lines) {
+        if (!l.item_id) continue;
+        const item = itemMap.get(l.item_id);
+        if (!item || !inv.isStocked(item)) continue;
+        let outstanding = Math.max(0, (l.quantity || 0) - (l.qty_fulfilled || 0));
+        if (outstanding <= 0) continue;
+
+        // Split the pick across bins, nearest first, so the picker is told
+        // exactly where to go rather than "somewhere in the warehouse".
+        const sources = binMap.get(l.item_id) || [];
+        if (!sources.length) {
+          repo.insert('pick_task', {
+            id: ulid(), wave_id: id, txn_id: order.id, txn_line_id: l.id,
+            item_id: l.item_id, bin_id: null, lot_number: '',
+            quantity: outstanding, quantity_picked: 0, pick_sequence: 999999,
+            status: 'pending', picked_by: null, picked_at: null,
+          });
+          lineCount++;
+          continue;
+        }
+        for (const src of sources) {
+          if (outstanding <= 0) break;
+          const free = Math.max(0, src.quantity - src.allocated);
+          if (free <= 0) continue;
+          const take = Math.min(free, outstanding);
+          repo.insert('pick_task', {
+            id: ulid(), wave_id: id, txn_id: order.id, txn_line_id: l.id,
+            item_id: l.item_id, bin_id: src.bin_id, lot_number: src.lot_number || '',
+            quantity: take, quantity_picked: 0, pick_sequence: src.pick_sequence || 0,
+            status: 'pending', picked_by: null, picked_at: null,
+          });
+          repo.exec(
+            `UPDATE bin_quantity SET allocated = allocated + ?
+             WHERE tenant_id = :t AND bin_id = ? AND item_id = ? AND lot_number = ? AND serial_no = ?`,
+            [take, src.bin_id, l.item_id, src.lot_number || '', src.serial_no || '']);
+          // The batched snapshot is read once above; without this, a second
+          // line in the same wave that draws on the same bin would see its
+          // capacity as still free and over-allocate it.
+          src.allocated += take;
+          outstanding -= take;
+          lineCount++;
+        }
       }
     }
-  }
-  repo.update('pick_wave', id, { line_count: lineCount });
-  audit.record(repo, { recordType: 'pick_wave', recordId: id, action: 'create' });
-  return { ...getWave(repo, id), tasks: waveTasks(repo, id) };
+    repo.update('pick_wave', id, { line_count: lineCount });
+    audit.record(repo, { recordType: 'pick_wave', recordId: id, action: 'create' });
+    return { ...getWave(repo, id), tasks: waveTasks(repo, id) };
+  });
 }
 
 export function releaseWave(repo, id) {
@@ -304,25 +360,27 @@ export function packWave(repo, waveId, { packages = [] } = {}) {
   // Default to one package per order, which is what actually happens unless
   // the packer says otherwise.
   const specs = packages.length ? packages : [...new Set(picked.map((p) => p.txn_id))].map((txn_id) => ({ txn_id }));
-  const created = [];
-  for (const spec of specs) {
-    const contents = picked
-      .filter((p) => !spec.txn_id || p.txn_id === spec.txn_id)
-      .map((p) => ({ item_id: p.item_id, quantity: Qty.toNumber(p.quantity_picked), lot: p.lot_number || null }));
-    const id = ulid();
-    repo.insert('package', {
-      id, wave_id: waveId, txn_id: spec.txn_id || null,
-      package_no: `${wave.wave_no}-${created.length + 1}`,
-      carrier: spec.carrier || '', service: spec.service || '', tracking_no: spec.tracking_no || '',
-      weight: Qty.parse(spec.weight || 0), length: Qty.parse(spec.length || 0),
-      width: Qty.parse(spec.width || 0), height: Qty.parse(spec.height || 0),
-      freight_cost: Money.parse(spec.freight_cost), shipped_at: null,
-      status: 'packed', contents, created_at: nowIso(),
-    });
-    created.push(id);
-  }
-  repo.update('pick_wave', waveId, { status: 'packed' });
-  return { wave: getWave(repo, waveId), packages: created.length };
+  return repo.tx(() => {
+    const created = [];
+    for (const spec of specs) {
+      const contents = picked
+        .filter((p) => !spec.txn_id || p.txn_id === spec.txn_id)
+        .map((p) => ({ item_id: p.item_id, quantity: Qty.toNumber(p.quantity_picked), lot: p.lot_number || null }));
+      const id = ulid();
+      repo.insert('package', {
+        id, wave_id: waveId, txn_id: spec.txn_id || null,
+        package_no: `${wave.wave_no}-${created.length + 1}`,
+        carrier: spec.carrier || '', service: spec.service || '', tracking_no: spec.tracking_no || '',
+        weight: Qty.parse(spec.weight || 0), length: Qty.parse(spec.length || 0),
+        width: Qty.parse(spec.width || 0), height: Qty.parse(spec.height || 0),
+        freight_cost: Money.parse(spec.freight_cost), shipped_at: null,
+        status: 'packed', contents, created_at: nowIso(),
+      });
+      created.push(id);
+    }
+    repo.update('pick_wave', waveId, { status: 'packed' });
+    return { wave: getWave(repo, waveId), packages: created.length };
+  });
 }
 
 /**

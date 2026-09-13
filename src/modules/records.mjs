@@ -141,8 +141,33 @@ export function blockersFor(repo, type, id) {
   return null;
 }
 
+/** Bulk resolution helpers to eliminate N+1 query patterns. */
 
-/** Generic create for record types without a bespoke module function. */
+export function resolveRecords(repo, table, ids) {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  if (!uniqueIds.length) return new Map();
+  const rows = repo.query(`SELECT * FROM ${table} WHERE id IN (${uniqueIds.map(() => '?').join(',')})`, uniqueIds);
+  return new Map(rows.map(r => [r.id, r]));
+}
+
+export function resolveTaxRates(repo, codes) {
+  const uniqueCodes = [...new Set(codes.filter(Boolean))];
+  if (!uniqueCodes.length) return new Map();
+  const rows = repo.query(`SELECT code, rate FROM tax_code WHERE code IN (${uniqueCodes.map(() => '?').join(',')})`, uniqueCodes);
+  return new Map(rows.map(r => [r.code, r]));
+}
+
+export function resolvePricingRules(repo) {
+  return repo.query(`SELECT * FROM pricing_rule WHERE tenant_id = :t AND active = 1 ORDER BY priority ASC`);
+}
+
+export function checkBankTxnDuplicates(repo, accountId, externalIds) {
+  const uniqueIds = [...new Set(externalIds.filter(Boolean))];
+  if (!uniqueIds.length) return new Set();
+  const rows = repo.query(`SELECT external_id FROM bank_txn WHERE tenant_id = :t AND bank_account_id = ? AND external_id IN (${uniqueIds.map(() => '?').join(',')})`, [accountId, ...uniqueIds]);
+  return new Set(rows.map(r => r.external_id));
+}
+
 export function genericCreate(repo, type, body) {
   const m = meta.getMeta(type);
   if (!m) throw badRequest(`Unknown record type "${type}"`);

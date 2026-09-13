@@ -208,40 +208,42 @@ export function run(repo, { as_of = today(), subsidiary_id = null, scopes = SCOP
     debit: net < 0 ? -net : 0, credit: net > 0 ? net : 0,
   });
 
-  const runId = ulid();
-  const runNo = nextNumber(repo, 'revaluation_run');
-  const description = memo || `Foreign currency revaluation at ${as_of}`;
-  const entry = gl.postJournal(repo, {
-    subsidiary_id: view.subsidiary_id, txn_date: as_of, currency: view.base_currency,
-    fx_rate: 1, memo: `${runNo} — ${description}`,
-    source_type: 'revaluation', source_id: runId, lines: journalLines,
-  });
+  return repo.tx(() => {
+    const runId = ulid();
+    const runNo = nextNumber(repo, 'revaluation_run');
+    const description = memo || `Foreign currency revaluation at ${as_of}`;
+    const entry = gl.postJournal(repo, {
+      subsidiary_id: view.subsidiary_id, txn_date: as_of, currency: view.base_currency,
+      fx_rate: 1, memo: `${runNo} — ${description}`,
+      source_type: 'revaluation', source_id: runId, lines: journalLines,
+    });
 
-  // The reversal goes in with the run, not left for somebody to remember. An
-  // unreversed revaluation double-counts the moment the next one posts.
-  const reversal = gl.reverseJournal(repo, entry.id, {
-    date: reverseOn, memo: `Reversal of ${runNo} — unrealised revaluation`,
-  });
+    // The reversal goes in with the run, not left for somebody to remember. An
+    // unreversed revaluation double-counts the moment the next one posts.
+    const reversal = gl.reverseJournal(repo, entry.id, {
+      date: reverseOn, memo: `Reversal of ${runNo} — unrealised revaluation`,
+    });
 
-  repo.insert('revaluation_run', {
-    id: runId, run_no: runNo, subsidiary_id: view.subsidiary_id, base_currency: view.base_currency,
-    as_of, period_id: period.id, reverse_on: reverseOn, scopes: view.scopes,
-    gain: view.gain, loss: view.loss, net: view.net,
-    entry_id: entry.id, reversal_entry_id: reversal.id, status: 'posted',
-    memo: description, created_at: nowIso(), created_by: repo.ctx?.user?.id || null,
-  });
-  for (const l of view.lines) repo.insert('revaluation_line', { id: ulid(), run_id: runId, ...l });
+    repo.insert('revaluation_run', {
+      id: runId, run_no: runNo, subsidiary_id: view.subsidiary_id, base_currency: view.base_currency,
+      as_of, period_id: period.id, reverse_on: reverseOn, scopes: view.scopes,
+      gain: view.gain, loss: view.loss, net: view.net,
+      entry_id: entry.id, reversal_entry_id: reversal.id, status: 'posted',
+      memo: description, created_at: nowIso(), created_by: repo.ctx?.user?.id || null,
+    });
+    for (const l of view.lines) repo.insert('revaluation_line', { id: ulid(), run_id: runId, ...l });
 
-  audit.record(repo, {
-    recordType: 'revaluation_run', recordId: runId, action: 'post',
-    changes: {
-      run_no: { from: null, to: runNo },
-      as_of: { from: null, to: as_of },
-      net: { from: null, to: Money.toNumber(view.net) },
-      entry: { from: null, to: entry.entry_no },
-    },
+    audit.record(repo, {
+      recordType: 'revaluation_run', recordId: runId, action: 'post',
+      changes: {
+        run_no: { from: null, to: runNo },
+        as_of: { from: null, to: as_of },
+        net: { from: null, to: Money.toNumber(view.net) },
+        entry: { from: null, to: entry.entry_no },
+      },
+    });
+    return { ...view, dry_run: false, posted: true, run: getRun(repo, runId) };
   });
-  return { ...view, dry_run: false, posted: true, run: getRun(repo, runId) };
 }
 
 /**
@@ -265,28 +267,30 @@ export function reverseRun(repo, id, { reason = '' } = {}) {
     }
   }
 
-  const why = reason ? ` — ${reason}` : '';
-  const cancellations = entries.map((e) => gl.postJournal(repo, {
-    subsidiary_id: e.subsidiary_id, txn_date: e.txn_date, currency: e.currency, fx_rate: e.fx_rate,
-    memo: `Cancellation of ${e.entry_no} (${r.run_no})${why}`,
-    source_type: 'revaluation', source_id: id,
-    lines: e.lines.map((l) => ({
-      account_id: l.account_id, memo: l.memo,
-      debit: l.credit, credit: l.debit,
-      base_debit: l.base_credit, base_credit: l.base_debit,
-    })),
-  }));
+  return repo.tx(() => {
+    const why = reason ? ` — ${reason}` : '';
+    const cancellations = entries.map((e) => gl.postJournal(repo, {
+      subsidiary_id: e.subsidiary_id, txn_date: e.txn_date, currency: e.currency, fx_rate: e.fx_rate,
+      memo: `Cancellation of ${e.entry_no} (${r.run_no})${why}`,
+      source_type: 'revaluation', source_id: id,
+      lines: e.lines.map((l) => ({
+        account_id: l.account_id, memo: l.memo,
+        debit: l.credit, credit: l.debit,
+        base_debit: l.base_credit, base_credit: l.base_debit,
+      })),
+    }));
 
-  repo.update('revaluation_run', id, { status: 'reversed' });
-  audit.record(repo, {
-    recordType: 'revaluation_run', recordId: id, action: 'reverse',
-    changes: {
-      status: { from: 'posted', to: 'reversed' },
-      cancelled_by: { from: null, to: cancellations.map((c) => c.entry_no).join(', ') },
-      reason: { from: null, to: reason || 'Undone by user' },
-    },
+    repo.update('revaluation_run', id, { status: 'reversed' });
+    audit.record(repo, {
+      recordType: 'revaluation_run', recordId: id, action: 'reverse',
+      changes: {
+        status: { from: 'posted', to: 'reversed' },
+        cancelled_by: { from: null, to: cancellations.map((c) => c.entry_no).join(', ') },
+        reason: { from: null, to: reason || 'Undone by user' },
+      },
+    });
+    return getRun(repo, id);
   });
-  return getRun(repo, id);
 }
 
 // ------------------------------------------------------------------ read

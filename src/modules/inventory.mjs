@@ -136,9 +136,10 @@ export function availability(repo, itemId) {
 export function moveStock(repo, {
   item_id, location_id, qty_delta, unit_cost = null, type, source_type = '', source_id = null,
   txn_date = null, memo = '', allow_negative = true, value_delta: valueOnly = null,
+  item = null, pos = null,
 }) {
-  const item = getItem(repo, item_id);
-  if (!isStocked(item)) {
+  const resolvedItem = item || getItem(repo, item_id);
+  if (!isStocked(resolvedItem)) {
     return { value_delta: 0, unit_cost_used: 0, avg_cost: 0, qty_after: 0, skipped: 'not_stocked' };
   }
   if (!location_id) throw new ValidationError({ location_id: 'A location is required to move stock' });
@@ -147,7 +148,7 @@ export function moveStock(repo, {
   // container makes the goods worth more without another unit arriving. The
   // average cost moves, the quantity does not.
   if (!qty_delta && valueOnly) {
-    const here = position(repo, item_id, location_id);
+    const here = pos || position(repo, item_id, location_id);
     const qty = here.qty_on_hand || 0;
     const value = (here.total_value || 0) + valueOnly;
     const avg = qty > 0 ? round(value / (qty / 1_000_000)) : (here.avg_cost || 0);
@@ -164,19 +165,19 @@ export function moveStock(repo, {
   }
   if (!qty_delta) return { value_delta: 0, unit_cost_used: 0, avg_cost: 0, qty_after: 0, skipped: 'zero_qty' };
 
-  const pos = position(repo, item_id, location_id);
-  const qtyBefore = pos.qty_on_hand || 0;
-  const valueBefore = pos.total_value || 0;
-  const avgBefore = pos.avg_cost || item.standard_cost || 0;
+  const here = pos || position(repo, item_id, location_id);
+  const qtyBefore = here.qty_on_hand || 0;
+  const valueBefore = here.total_value || 0;
+  const avgBefore = here.avg_cost || resolvedItem.standard_cost || 0;
 
   let valueDelta, unitCostUsed;
   if (qty_delta > 0) {
-    unitCostUsed = unit_cost ?? avgBefore ?? item.standard_cost ?? 0;
+    unitCostUsed = unit_cost ?? avgBefore ?? resolvedItem.standard_cost ?? 0;
     valueDelta = Qty.extend(qty_delta, unitCostUsed);
   } else {
     unitCostUsed = avgBefore;
     if (!allow_negative && qtyBefore + qty_delta < 0) {
-      throw unprocessable(`Only ${Qty.format(qtyBefore)} ${item.uom} of ${item.sku} on hand at this location; cannot issue ${Qty.format(-qty_delta)}.`);
+      throw unprocessable(`Only ${Qty.format(qtyBefore)} ${resolvedItem.uom} of ${resolvedItem.sku} on hand at this location; cannot issue ${Qty.format(-qty_delta)}.`);
     }
     valueDelta = -Qty.extend(-qty_delta, unitCostUsed);
     // When quantity lands exactly on zero, flush the whole remaining value so

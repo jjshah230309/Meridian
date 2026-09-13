@@ -75,34 +75,36 @@ export function createBom(repo, input) {
 
   const now = nowIso();
   const id = ulid();
-  repo.insert('bom', {
-    id, item_id: input.item_id, name: input.name,
-    revision: input.revision || 'A', status: 'draft',
-    effective_from: input.effective_from || null, effective_to: input.effective_to || null,
-    yield_pct: Number(input.yield_pct ?? 100),
-    is_default: input.is_default ? 1 : 0,
-    notes: input.notes || '', custom: input.custom || {},
-    created_at: now, updated_at: now,
-  });
-  lines.forEach((l, i) => repo.insert('bom_line', {
-    id: ulid(), bom_id: id, line_no: i + 1,
-    component_id: l.component_id, quantity: Qty.parse(l.quantity),
-    scrap_pct: Number(l.scrap_pct || 0), operation_no: l.operation_no ?? null,
-    is_optional: l.is_optional ? 1 : 0, notes: l.notes || '',
-  }));
-  for (const [i, st] of (input.routing || []).entries()) {
-    repo.insert('routing_step', {
-      id: ulid(), bom_id: id, operation_no: st.operation_no ?? (i + 1) * 10,
-      name: st.name || `Operation ${i + 1}`, work_center_id: st.work_center_id || null,
-      setup_hours: Qty.parse(st.setup_hours || 0), run_hours: Qty.parse(st.run_hours || 0),
-      instructions: st.instructions || '',
+  return repo.tx(() => {
+    repo.insert('bom', {
+      id, item_id: input.item_id, name: input.name,
+      revision: input.revision || 'A', status: 'draft',
+      effective_from: input.effective_from || null, effective_to: input.effective_to || null,
+      yield_pct: Number(input.yield_pct ?? 100),
+      is_default: input.is_default ? 1 : 0,
+      notes: input.notes || '', custom: input.custom || {},
+      created_at: now, updated_at: now,
     });
-  }
-  if (input.is_default) {
-    repo.exec('UPDATE bom SET is_default = 0 WHERE tenant_id = :t AND item_id = ? AND id != ?', [input.item_id, id]);
-  }
-  audit.record(repo, { recordType: 'bom', recordId: id, action: 'create' });
-  return getBom(repo, id);
+    lines.forEach((l, i) => repo.insert('bom_line', {
+      id: ulid(), bom_id: id, line_no: i + 1,
+      component_id: l.component_id, quantity: Qty.parse(l.quantity),
+      scrap_pct: Number(l.scrap_pct || 0), operation_no: l.operation_no ?? null,
+      is_optional: l.is_optional ? 1 : 0, notes: l.notes || '',
+    }));
+    for (const [i, st] of (input.routing || []).entries()) {
+      repo.insert('routing_step', {
+        id: ulid(), bom_id: id, operation_no: st.operation_no ?? (i + 1) * 10,
+        name: st.name || `Operation ${i + 1}`, work_center_id: st.work_center_id || null,
+        setup_hours: Qty.parse(st.setup_hours || 0), run_hours: Qty.parse(st.run_hours || 0),
+        instructions: st.instructions || '',
+      });
+    }
+    if (input.is_default) {
+      repo.exec('UPDATE bom SET is_default = 0 WHERE tenant_id = :t AND item_id = ? AND id != ?', [input.item_id, id]);
+    }
+    audit.record(repo, { recordType: 'bom', recordId: id, action: 'create' });
+    return getBom(repo, id);
+  });
 }
 
 export function releaseBom(repo, id) {
@@ -143,7 +145,8 @@ export function explode(repo, itemId, quantity = 1_000_000, depth = 0, seen = ne
 }
 
 /** Rolled-up standard cost of building one of `itemId`. */
-export function rollupCost(repo, itemId) {
+export function rollupCost(repo, itemId, cache = new Map()) {
+  if (cache.has(itemId)) return cache.get(itemId);
   const components = explode(repo, itemId).filter((c) => c.depth === 0);
   let material = 0;
   const detail = [];
@@ -151,7 +154,7 @@ export function rollupCost(repo, itemId) {
     const item = repo.get('item', c.component_id);
     const sub = repo.queryOne(
       "SELECT id FROM bom WHERE tenant_id = :t AND item_id = ? AND status = 'released' LIMIT 1", [c.component_id]);
-    const unit = sub ? rollupCost(repo, c.component_id).unit_cost_minor : (item?.standard_cost || 0);
+    const unit = sub ? rollupCost(repo, c.component_id, cache).unit_cost_minor : (item?.standard_cost || 0);
     const cost = Qty.extend(c.quantity, unit);
     material += cost;
     detail.push({ sku: c.sku, name: c.name, quantity: c.quantity_display, unit_cost: Money.toNumber(unit), cost: Money.toNumber(cost) });
@@ -169,11 +172,13 @@ export function rollupCost(repo, itemId) {
     }
   }
   const total = material + labour + overhead;
-  return {
+  const result = {
     item_id: itemId, components: detail,
     material: Money.toNumber(material), labour: Money.toNumber(labour), overhead: Money.toNumber(overhead),
     unit_cost: Money.toNumber(total), unit_cost_minor: total,
   };
+  cache.set(itemId, result);
+  return result;
 }
 
 // ----------------------------------------------------------- work orders
@@ -211,45 +216,47 @@ export function createWorkOrder(repo, input) {
   const defaults = postingAccounts(repo);
   const now = nowIso();
   const id = ulid();
-  repo.insert('work_order', {
-    id, order_no: input.order_no || nextNumber(repo, 'WORK_ORDER'),
-    item_id: input.item_id, bom_id: bom.id,
-    subsidiary_id: input.subsidiary_id, location_id: input.location_id,
-    quantity, quantity_built: 0, quantity_scrapped: 0,
-    status: 'planned', priority: Number(input.priority || 5),
-    start_date: input.start_date || null, due_date: input.due_date || null, completed_date: null,
-    sales_order_id: input.sales_order_id || null, project_id: input.project_id || null,
-    component_cost: 0, labour_cost: 0, overhead_cost: 0, built_value: 0, variance: 0,
-    wip_account_id: input.wip_account_id || defaults.wip || null,
-    variance_account_id: input.variance_account_id || defaults.mfg_variance || null,
-    memo: input.memo || '', custom: input.custom || {},
-    created_at: now, updated_at: now,
-  });
+  return repo.tx(() => {
+    repo.insert('work_order', {
+      id, order_no: input.order_no || nextNumber(repo, 'WORK_ORDER'),
+      item_id: input.item_id, bom_id: bom.id,
+      subsidiary_id: input.subsidiary_id, location_id: input.location_id,
+      quantity, quantity_built: 0, quantity_scrapped: 0,
+      status: 'planned', priority: Number(input.priority || 5),
+      start_date: input.start_date || null, due_date: input.due_date || null, completed_date: null,
+      sales_order_id: input.sales_order_id || null, project_id: input.project_id || null,
+      component_cost: 0, labour_cost: 0, overhead_cost: 0, built_value: 0, variance: 0,
+      wip_account_id: input.wip_account_id || defaults.wip || null,
+      variance_account_id: input.variance_account_id || defaults.mfg_variance || null,
+      memo: input.memo || '', custom: input.custom || {},
+      created_at: now, updated_at: now,
+    });
 
-  // Snapshot the BOM onto the order. A BOM revised tomorrow must not change
-  // what a job started today was supposed to consume.
-  const factor = quantity / 1_000_000;
-  bomLines(repo, bom.id).forEach((l, i) => {
-    const scrapFactor = 1 + (l.scrap_pct || 0) / 100;
-    repo.insert('work_order_line', {
-      id: ulid(), work_order_id: id, line_no: i + 1,
-      component_id: l.component_id,
-      quantity_required: round(l.quantity * factor * scrapFactor),
-      quantity_issued: 0,
-      unit_cost: repo.get('item', l.component_id)?.standard_cost || 0,
-      location_id: input.location_id, operation_no: l.operation_no ?? null,
+    // Snapshot the BOM onto the order. A BOM revised tomorrow must not change
+    // what a job started today was supposed to consume.
+    const factor = quantity / 1_000_000;
+    bomLines(repo, bom.id).forEach((l, i) => {
+      const scrapFactor = 1 + (l.scrap_pct || 0) / 100;
+      repo.insert('work_order_line', {
+        id: ulid(), work_order_id: id, line_no: i + 1,
+        component_id: l.component_id,
+        quantity_required: round(l.quantity * factor * scrapFactor),
+        quantity_issued: 0,
+        unit_cost: repo.get('item', l.component_id)?.standard_cost || 0,
+        location_id: input.location_id, operation_no: l.operation_no ?? null,
+      });
     });
+    for (const st of routingFor(repo, bom.id)) {
+      repo.insert('work_order_operation', {
+        id: ulid(), work_order_id: id, operation_no: st.operation_no,
+        name: st.name, work_center_id: st.work_center_id,
+        planned_hours: (st.setup_hours || 0) + round((st.run_hours || 0) * factor),
+        actual_hours: 0, status: 'pending', started_at: null, completed_at: null,
+      });
+    }
+    audit.record(repo, { recordType: 'work_order', recordId: id, action: 'create' });
+    return { ...getWorkOrder(repo, id), lines: woLines(repo, id), operations: woOperations(repo, id) };
   });
-  for (const st of routingFor(repo, bom.id)) {
-    repo.insert('work_order_operation', {
-      id: ulid(), work_order_id: id, operation_no: st.operation_no,
-      name: st.name, work_center_id: st.work_center_id,
-      planned_hours: (st.setup_hours || 0) + round((st.run_hours || 0) * factor),
-      actual_hours: 0, status: 'pending', started_at: null, completed_at: null,
-    });
-  }
-  audit.record(repo, { recordType: 'work_order', recordId: id, action: 'create' });
-  return { ...getWorkOrder(repo, id), lines: woLines(repo, id), operations: woOperations(repo, id) };
 }
 
 /** Do we have the components to start? Answered before anyone walks to the floor. */
@@ -272,12 +279,14 @@ export function componentAvailability(repo, id) {
 export function releaseWorkOrder(repo, id) {
   const wo = getWorkOrder(repo, id);
   if (wo.status !== 'planned') throw unprocessable(`${wo.order_no} is already ${wo.status}`);
-  repo.update('work_order', id, { status: 'released', updated_at: nowIso() });
-  for (const l of woLines(repo, id)) {
-    inv.commit(repo, l.component_id, l.location_id || wo.location_id, l.quantity_required - l.quantity_issued);
-  }
-  audit.record(repo, { recordType: 'work_order', recordId: id, action: 'release' });
-  return getWorkOrder(repo, id);
+  return repo.tx(() => {
+    repo.update('work_order', id, { status: 'released', updated_at: nowIso() });
+    for (const l of woLines(repo, id)) {
+      inv.commit(repo, l.component_id, l.location_id || wo.location_id, l.quantity_required - l.quantity_issued);
+    }
+    audit.record(repo, { recordType: 'work_order', recordId: id, action: 'release' });
+    return getWorkOrder(repo, id);
+  });
 }
 
 /**
@@ -348,44 +357,46 @@ export function logOperation(repo, id, operationId, { hours, complete = false })
   const labour = wc ? Qty.extend(h, wc.labour_rate || 0) : 0;
   const overhead = wc ? Qty.extend(h, wc.overhead_rate || 0) : 0;
 
-  repo.update('work_order_operation', operationId, {
-    actual_hours: op.actual_hours + h,
-    status: complete ? 'complete' : 'running',
-    started_at: op.started_at || nowIso(),
-    completed_at: complete ? nowIso() : null,
-  });
-  repo.update('work_order', id, {
-    labour_cost: wo.labour_cost + labour, overhead_cost: wo.overhead_cost + overhead,
-    status: 'in_progress', updated_at: nowIso(),
-  });
+  return repo.tx(() => {
+    repo.update('work_order_operation', operationId, {
+      actual_hours: op.actual_hours + h,
+      status: complete ? 'complete' : 'running',
+      started_at: op.started_at || nowIso(),
+      completed_at: complete ? nowIso() : null,
+    });
+    repo.update('work_order', id, {
+      labour_cost: wo.labour_cost + labour, overhead_cost: wo.overhead_cost + overhead,
+      status: 'in_progress', updated_at: nowIso(),
+    });
 
-  // Labour and overhead are absorbed into the job the moment they are worked,
-  // not conjured at receipt: without this the assembly would enter stock
-  // carrying a cost no account ever gave up.
-  if (labour || overhead) {
-    const acct = buildAccounts(repo, wo);
-    const lines = [];
-    if (labour) {
-      lines.push({ account_id: acct.wip, debit: labour, credit: 0, memo: 'Direct labour to WIP' });
-      lines.push({ account_id: acct.labour || acct.variance, debit: 0, credit: labour, memo: 'Labour absorbed' });
+    // Labour and overhead are absorbed into the job the moment they are worked,
+    // not conjured at receipt: without this the assembly would enter stock
+    // carrying a cost no account ever gave up.
+    if (labour || overhead) {
+      const acct = buildAccounts(repo, wo);
+      const lines = [];
+      if (labour) {
+        lines.push({ account_id: acct.wip, debit: labour, credit: 0, memo: 'Direct labour to WIP' });
+        lines.push({ account_id: acct.labour || acct.variance, debit: 0, credit: labour, memo: 'Labour absorbed' });
+      }
+      if (overhead) {
+        lines.push({ account_id: acct.wip, debit: overhead, credit: 0, memo: 'Overhead to WIP' });
+        lines.push({ account_id: acct.overhead || acct.variance, debit: 0, credit: overhead, memo: 'Overhead absorbed' });
+      }
+      if (lines.every((l) => l.account_id)) {
+        gl.postJournal(repo, {
+          subsidiary_id: wo.subsidiary_id, txn_date: today(),
+          memo: `${wo.order_no} ${op.name || 'operation'} logged`,
+          source_type: 'work_order', source_id: id, lines,
+        });
+      }
     }
-    if (overhead) {
-      lines.push({ account_id: acct.wip, debit: overhead, credit: 0, memo: 'Overhead to WIP' });
-      lines.push({ account_id: acct.overhead || acct.variance, debit: 0, credit: overhead, memo: 'Overhead absorbed' });
-    }
-    if (lines.every((l) => l.account_id)) {
-      gl.postJournal(repo, {
-        subsidiary_id: wo.subsidiary_id, txn_date: today(),
-        memo: `${wo.order_no} ${op.name || 'operation'} logged`,
-        source_type: 'work_order', source_id: id, lines,
-      });
-    }
-  }
 
-  return {
-    operation: repo.get('work_order_operation', operationId),
-    labour: Money.toNumber(labour), overhead: Money.toNumber(overhead),
-  };
+    return {
+      operation: repo.get('work_order_operation', operationId),
+      labour: Money.toNumber(labour), overhead: Money.toNumber(overhead),
+    };
+  });
 }
 
 /**

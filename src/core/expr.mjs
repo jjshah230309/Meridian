@@ -225,7 +225,35 @@ export const FUNCTIONS = {
     cap(s.length + hits * (to.length - from.length));
     return s.split(from).join(to);
   },
+  SPLIT: (v, s) => toStr(v).split(toStr(s)),
   TEXT: toStr,
+  // logic / control
+  SWITCH: (expr, ...args) => {
+    for (let i = 0; i < args.length; i += 2) {
+      if (looseEq(expr, args[i])) return args[i+1];
+    }
+    return null;
+  },
+  // financials
+  NPV: (rate, ...vals) => {
+    const r = toNum(rate);
+    return vals.reduce((acc, v, i) => acc + toNum(v) / Math.pow(1 + r, i + 1), 0);
+  },
+  IRR: (vals) => {
+    let guess = 0.1;
+    for (let i = 0; i < 100; i++) {
+      let npv = 0, dnpv = 0;
+      for (let j = 0; j < vals.length; j++) {
+        const v = toNum(vals[j]);
+        npv += v / Math.pow(1 + guess, j);
+        dnpv -= j * v / Math.pow(1 + guess, j + 1);
+      }
+      const next = guess - npv / dnpv;
+      if (Math.abs(next - guess) < 1e-7) return next;
+      guess = next;
+    }
+    return null;
+  },
   // dates
   TODAY: () => new Date().toISOString().slice(0, 10),
   NOW: () => new Date().toISOString(),
@@ -234,10 +262,49 @@ export const FUNCTIONS = {
   DAY: (d) => Number(isoDate(d).slice(8, 10)),
   DATE_ADD: (d, n) => { const x = new Date(isoDate(d) + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + toNum(n)); return x.toISOString().slice(0, 10); },
   DAYS_BETWEEN: (a, b) => Math.round((Date.parse(isoDate(b) + 'T00:00:00Z') - Date.parse(isoDate(a) + 'T00:00:00Z')) / 86400000),
+  EOMONTH: (d) => {
+    const x = new Date(isoDate(d) + 'T00:00:00Z');
+    x.setUTCMonth(x.getUTCMonth() + 1, 0);
+    return x.toISOString().slice(0, 10);
+  },
+  ADD_MONTHS: (d, n) => {
+    const x = new Date(isoDate(d) + 'T00:00:00Z');
+    const day = x.getUTCDate();
+    x.setUTCMonth(x.getUTCMonth() + toNum(n));
+    const last = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0)).getUTCDate();
+    x.setUTCDate(Math.min(day, last));
+    return x.toISOString().slice(0, 10);
+  },
+  WORKING_DAYS_BETWEEN: (a, b) => {
+    const start = new Date(isoDate(a) + 'T00:00:00Z');
+    const end = new Date(isoDate(b) + 'T00:00:00Z');
+    let count = 0;
+    const cur = new Date(start);
+    while (cur < end) {
+      const day = cur.getUTCDay();
+      if (day !== 0 && day !== 6) count++;
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+    return count;
+  },
   // money helpers (values in the model are minor units)
   MONEY: (v) => toNum(v) / 100,
   CENTS: (v) => Math.round(toNum(v) * 100),
   QTY: (v) => toNum(v) / 1e6,
+  // financials
+  PMT: (rate, nper, pv) => {
+    const r = toNum(rate) / 12; const n = toNum(nper); const v = toNum(pv);
+    return r === 0 ? -v / n : (-v * r) / (1 - Math.pow(1 + r, -n));
+  },
+  FV: (rate, nper, pmt, pv = 0) => {
+    const r = toNum(rate) / 12; const n = toNum(nper); const p = toNum(pmt); const v = toNum(pv);
+    return v * Math.pow(1 + r, n) + p * (Math.pow(1 + r, n) - 1) / r;
+  },
+  PV: (rate, nper, pmt, fv = 0) => {
+    const r = toNum(rate) / 12; const n = toNum(nper); const p = toNum(pmt); const v = toNum(fv);
+    return (v + p * (Math.pow(1 + r, n) - 1) / r) / Math.pow(1 + r, n);
+  },
+
 };
 
 // ------------------------------------------------------------ evaluator
@@ -361,7 +428,7 @@ export function test(source, scope = {}) {
 /** Validate without running. Returns {ok, error}. */
 export function validate(source) {
   try { compile(source); return { ok: true }; }
-  catch (e) { return { ok: false, error: e.message }; }
+  catch (e) { return { ok: false, error: e.message, pos: e.pos }; }
 }
 
 export { truthy };

@@ -149,6 +149,10 @@ export function computeLines(repo, { type, header, lines, entity = null }) {
   // transaction have a tax position, so `entity` drives the rate while only a
   // customer drives the price.
   const customer = TYPES[type]?.entity === 'customer' ? entity : null;
+
+  const itemIds = [...new Set(lines.map((l) => l.item_id).filter(Boolean))];
+  const itemMap = new Map(repo.find('item', { where: { id: itemIds } }).map((i) => [i.id, i]));
+
   lines.forEach((given, i) => {
     // `rate` is the word the rest of the system uses for an agreed per-unit
     // price -- a project's bill rate, a service line's price, a cart price
@@ -163,7 +167,7 @@ export function computeLines(repo, { type, header, lines, entity = null }) {
 
     let item = null;
     if (raw.item_id) {
-      item = repo.get('item', raw.item_id);
+      item = itemMap.get(raw.item_id);
       if (!item) { errors[`lines.${i}.item_id`] = `Item ${raw.item_id} not found`; return; }
       if (!item.active) { errors[`lines.${i}.item_id`] = `${item.sku} is inactive`; return; }
     } else if (!raw.account_id && type !== 'INVENTORY_TRANSFER') {
@@ -357,68 +361,70 @@ export function createTxn(repo, type, input, { autoPost = true, skipApproval = f
   const txnNo = input.txn_no || nextNumber(repo, cfg.sequence);
   const terms = input.terms || entity?.terms || 'NET30';
 
-  repo.insert('txn', {
-    id, type, txn_no: txnNo, txn_date: txnDate,
-    entity_type: cfg.entity, entity_id: entity?.id || null,
-    subsidiary_id: subsidiaryId, location_id: input.location_id || null,
-    to_location_id: input.to_location_id || null,
-    department_id: input.department_id || null, class_id: input.class_id || null,
-    currency, fx_rate: fxRate, memo: input.memo || '', reference: input.reference || '',
-    status, approval_status: approvalStatus,
-    subtotal: totals.subtotal, discount_total: totals.discount_total, tax_total: totals.tax_total,
-    shipping_total: totals.shipping_total, total: totals.total,
-    base_total: Money.convert(totals.total, fxRate),
-    amount_applied: 0,
-    amount_remaining: (cfg.receivable || cfg.payable) ? totals.total : 0,
-    terms,
-    due_date: input.due_date || ((cfg.receivable || cfg.payable) ? termsToDueDate(txnDate, terms) : null),
-    ship_date: input.ship_date || null, ship_method: input.ship_method || '',
-    tracking_no: input.tracking_no || '',
-    billing_address: input.billing_address || entity?.billing_address || entity?.address || {},
-    // On a purchase the goods come to us: the ship-to is the receiving site,
-    // not the supplier's own address. Leaving it blank prints a purchase order
-    // that never says where to deliver.
-    shipping_address: input.shipping_address || entity?.shipping_address
-      || (cfg.entity === 'vendor' && header.location_id ? repo.get('location', header.location_id)?.address : null)
-      || {},
-    source_txn_id: input.source_txn_id || null, journal_entry_id: null, period_id: null, posted: 0,
-    sales_rep_id: input.sales_rep_id || entity?.sales_rep_id || null,
-    price_level_id: header.price_level_id,
-    opportunity_id: input.opportunity_id || null,
-    probability: input.probability ?? 100, expected_close: input.expected_close || null,
-    custom: input.custom || {}, created_at: now, created_by: repo.ctx?.user?.id || null, updated_at: now,
-  });
-
-  for (const l of lines) {
-    repo.insert('txn_line', {
-      id: l.id, txn_id: id, line_no: l.line_no, item_id: l.item_id, account_id: l.account_id,
-      schedule_template_id: l.schedule_template_id || null,
-      service_start: l.service_start || null, service_end: l.service_end || null,
-      description: l.description, quantity: l.quantity, unit_price: l.unit_price, unit_cost: l.unit_cost,
-      discount_pct: l.discount_pct, discount_amount: l.discount_amount, amount: l.amount,
-      tax_code: l.tax_code, tax_rate: l.tax_rate, tax_amount: l.tax_amount,
-      location_id: l.location_id, department_id: l.department_id, class_id: l.class_id,
-      qty_committed: l.qty_committed, qty_fulfilled: l.qty_fulfilled, qty_billed: l.qty_billed,
-      qty_received: l.qty_received, source_line_id: l.source_line_id, is_closed: l.is_closed, custom: l.custom,
+  return repo.tx(() => {
+    repo.insert('txn', {
+      id, type, txn_no: txnNo, txn_date: txnDate,
+      entity_type: cfg.entity, entity_id: entity?.id || null,
+      subsidiary_id: subsidiaryId, location_id: input.location_id || null,
+      to_location_id: input.to_location_id || null,
+      department_id: input.department_id || null, class_id: input.class_id || null,
+      currency, fx_rate: fxRate, memo: input.memo || '', reference: input.reference || '',
+      status, approval_status: approvalStatus,
+      subtotal: totals.subtotal, discount_total: totals.discount_total, tax_total: totals.tax_total,
+      shipping_total: totals.shipping_total, total: totals.total,
+      base_total: Money.convert(totals.total, fxRate),
+      amount_applied: 0,
+      amount_remaining: (cfg.receivable || cfg.payable) ? totals.total : 0,
+      terms,
+      due_date: input.due_date || ((cfg.receivable || cfg.payable) ? termsToDueDate(txnDate, terms) : null),
+      ship_date: input.ship_date || null, ship_method: input.ship_method || '',
+      tracking_no: input.tracking_no || '',
+      billing_address: input.billing_address || entity?.billing_address || entity?.address || {},
+      // On a purchase the goods come to us: the ship-to is the receiving site,
+      // not the supplier's own address. Leaving it blank prints a purchase order
+      // that never says where to deliver.
+      shipping_address: input.shipping_address || entity?.shipping_address
+        || (cfg.entity === 'vendor' && header.location_id ? repo.get('location', header.location_id)?.address : null)
+        || {},
+      source_txn_id: input.source_txn_id || null, journal_entry_id: null, period_id: null, posted: 0,
+      sales_rep_id: input.sales_rep_id || entity?.sales_rep_id || null,
+      price_level_id: header.price_level_id,
+      opportunity_id: input.opportunity_id || null,
+      probability: input.probability ?? 100, expected_close: input.expected_close || null,
+      custom: input.custom || {}, created_at: now, created_by: repo.ctx?.user?.id || null, updated_at: now,
     });
-  }
 
-  // ---- side effects that do not need the GL
-  if (cfg.commits && status === 'open') commitLines(repo, id, +1);
-  if (cfg.onOrder && status === 'open') onOrderLines(repo, id, +1);
+    for (const l of lines) {
+      repo.insert('txn_line', {
+        id: l.id, txn_id: id, line_no: l.line_no, item_id: l.item_id, account_id: l.account_id,
+        schedule_template_id: l.schedule_template_id || null,
+        service_start: l.service_start || null, service_end: l.service_end || null,
+        description: l.description, quantity: l.quantity, unit_price: l.unit_price, unit_cost: l.unit_cost,
+        discount_pct: l.discount_pct, discount_amount: l.discount_amount, amount: l.amount,
+        tax_code: l.tax_code, tax_rate: l.tax_rate, tax_amount: l.tax_amount,
+        location_id: l.location_id, department_id: l.department_id, class_id: l.class_id,
+        qty_committed: l.qty_committed, qty_fulfilled: l.qty_fulfilled, qty_billed: l.qty_billed,
+        qty_received: l.qty_received, source_line_id: l.source_line_id, is_closed: l.is_closed, custom: l.custom,
+      });
+    }
 
-  audit.record(repo, {
-    recordType: PERM_FOR[type], recordId: id, action: 'create',
-    changes: { txn_no: { from: null, to: txnNo }, total: { from: null, to: Money.toNumber(totals.total) }, status: { from: null, to: status } },
+    // ---- side effects that do not need the GL
+    if (cfg.commits && status === 'open') commitLines(repo, id, +1);
+    if (cfg.onOrder && status === 'open') onOrderLines(repo, id, +1);
+
+    audit.record(repo, {
+      recordType: PERM_FOR[type], recordId: id, action: 'create',
+      changes: { txn_no: { from: null, to: txnNo }, total: { from: null, to: Money.toNumber(totals.total) }, status: { from: null, to: status } },
+    });
+    reindexTxn(repo, id);
+
+    // ---- posting
+    if (autoPost && cfg.posts && status !== 'pending_approval') postTxn(repo, id);
+
+    const result = getTxn(repo, id);
+    if (creditWarning) result.warnings = [creditWarning];
+    return result;
   });
-  reindexTxn(repo, id);
-
-  // ---- posting
-  if (autoPost && cfg.posts && status !== 'pending_approval') postTxn(repo, id);
-
-  const result = getTxn(repo, id);
-  if (creditWarning) result.warnings = [creditWarning];
-  return result;
 }
 
 export function updateTxn(repo, id, patch) {
@@ -444,48 +450,50 @@ export function updateTxn(repo, id, patch) {
   const rawLines = patch.lines || before.lines;
   const { lines, totals } = computeLines(repo, { type: before.type, header, lines: rawLines, entity });
 
-  repo.exec('DELETE FROM txn_line WHERE tenant_id = :t AND txn_id = ?', [id]);
-  for (const l of lines) {
-    repo.insert('txn_line', {
-      id: l.id, txn_id: id, line_no: l.line_no, item_id: l.item_id, account_id: l.account_id,
-      schedule_template_id: l.schedule_template_id || null,
-      service_start: l.service_start || null, service_end: l.service_end || null,
-      description: l.description, quantity: l.quantity, unit_price: l.unit_price, unit_cost: l.unit_cost,
-      discount_pct: l.discount_pct, discount_amount: l.discount_amount, amount: l.amount,
-      tax_code: l.tax_code, tax_rate: l.tax_rate, tax_amount: l.tax_amount,
-      location_id: l.location_id, department_id: l.department_id, class_id: l.class_id,
-      qty_committed: l.qty_committed, qty_fulfilled: l.qty_fulfilled, qty_billed: l.qty_billed,
-      qty_received: l.qty_received, source_line_id: l.source_line_id, is_closed: l.is_closed, custom: l.custom,
+  return repo.tx(() => {
+    repo.exec('DELETE FROM txn_line WHERE tenant_id = :t AND txn_id = ?', [id]);
+    for (const l of lines) {
+      repo.insert('txn_line', {
+        id: l.id, txn_id: id, line_no: l.line_no, item_id: l.item_id, account_id: l.account_id,
+        schedule_template_id: l.schedule_template_id || null,
+        service_start: l.service_start || null, service_end: l.service_end || null,
+        description: l.description, quantity: l.quantity, unit_price: l.unit_price, unit_cost: l.unit_cost,
+        discount_pct: l.discount_pct, discount_amount: l.discount_amount, amount: l.amount,
+        tax_code: l.tax_code, tax_rate: l.tax_rate, tax_amount: l.tax_amount,
+        location_id: l.location_id, department_id: l.department_id, class_id: l.class_id,
+        qty_committed: l.qty_committed, qty_fulfilled: l.qty_fulfilled, qty_billed: l.qty_billed,
+        qty_received: l.qty_received, source_line_id: l.source_line_id, is_closed: l.is_closed, custom: l.custom,
+      });
+    }
+
+    const terms = patch.terms || before.terms;
+    const fxRate = header.currency === gl.subsidiaryCurrency(repo, before.subsidiary_id) ? 1 : gl.exchangeRate(repo, header.currency, gl.subsidiaryCurrency(repo, before.subsidiary_id), header.txn_date);
+    repo.update('txn', id, {
+      txn_date: header.txn_date, currency: header.currency, fx_rate: fxRate,
+      memo: patch.memo ?? before.memo, reference: patch.reference ?? before.reference,
+      location_id: header.location_id, department_id: header.department_id, class_id: header.class_id,
+      subtotal: totals.subtotal, discount_total: totals.discount_total, tax_total: totals.tax_total,
+      shipping_total: totals.shipping_total, total: totals.total,
+      base_total: Money.convert(totals.total, fxRate),
+      amount_remaining: (cfg.receivable || cfg.payable) ? totals.total - (before.amount_applied || 0) : 0,
+      terms, due_date: patch.due_date ?? ((cfg.receivable || cfg.payable) ? termsToDueDate(header.txn_date, terms) : before.due_date),
+      ship_date: patch.ship_date ?? before.ship_date, ship_method: patch.ship_method ?? before.ship_method,
+      tracking_no: patch.tracking_no ?? before.tracking_no,
+      shipping_address: patch.shipping_address ?? before.shipping_address,
+      billing_address: patch.billing_address ?? before.billing_address,
+      sales_rep_id: patch.sales_rep_id ?? before.sales_rep_id,
+      custom: patch.custom ?? before.custom,
+      updated_at: nowIso(),
     });
-  }
 
-  const terms = patch.terms || before.terms;
-  const fxRate = header.currency === gl.subsidiaryCurrency(repo, before.subsidiary_id) ? 1 : gl.exchangeRate(repo, header.currency, gl.subsidiaryCurrency(repo, before.subsidiary_id), header.txn_date);
-  repo.update('txn', id, {
-    txn_date: header.txn_date, currency: header.currency, fx_rate: fxRate,
-    memo: patch.memo ?? before.memo, reference: patch.reference ?? before.reference,
-    location_id: header.location_id, department_id: header.department_id, class_id: header.class_id,
-    subtotal: totals.subtotal, discount_total: totals.discount_total, tax_total: totals.tax_total,
-    shipping_total: totals.shipping_total, total: totals.total,
-    base_total: Money.convert(totals.total, fxRate),
-    amount_remaining: (cfg.receivable || cfg.payable) ? totals.total - (before.amount_applied || 0) : 0,
-    terms, due_date: patch.due_date ?? ((cfg.receivable || cfg.payable) ? termsToDueDate(header.txn_date, terms) : before.due_date),
-    ship_date: patch.ship_date ?? before.ship_date, ship_method: patch.ship_method ?? before.ship_method,
-    tracking_no: patch.tracking_no ?? before.tracking_no,
-    shipping_address: patch.shipping_address ?? before.shipping_address,
-    billing_address: patch.billing_address ?? before.billing_address,
-    sales_rep_id: patch.sales_rep_id ?? before.sales_rep_id,
-    custom: patch.custom ?? before.custom,
-    updated_at: nowIso(),
+    if (cfg.commits && before.status === 'open') commitLines(repo, id, +1);
+    if (cfg.onOrder && before.status === 'open') onOrderLines(repo, id, +1);
+
+    const after = getTxn(repo, id);
+    audit.record(repo, { recordType: PERM_FOR[before.type], recordId: id, action: 'update', before, after });
+    reindexTxn(repo, id);
+    return after;
   });
-
-  if (cfg.commits && before.status === 'open') commitLines(repo, id, +1);
-  if (cfg.onOrder && before.status === 'open') onOrderLines(repo, id, +1);
-
-  const after = getTxn(repo, id);
-  audit.record(repo, { recordType: PERM_FOR[before.type], recordId: id, action: 'update', before, after });
-  reindexTxn(repo, id);
-  return after;
 }
 
 function commitLines(repo, txnId, sign) {
@@ -583,7 +591,7 @@ function settlementBase(repo, t) {
   return { base, applied, fxDifference: Money.convert(t.total, t.fx_rate || 1) - base };
 }
 
-export function postingPlan(repo, t, lines, acc) {
+export function postingPlan(repo, t, lines, acc, itemMap = new Map()) {
   const L = [];
   const push = (accountId, debit, credit, extra = {}) => {
     if (!accountId) throw unprocessable(`No GL account is configured for part of ${t.txn_no}. Check the item's account mapping and the default posting accounts under Setup.`);
@@ -626,7 +634,7 @@ export function postingPlan(repo, t, lines, acc) {
     case 'INVOICE': {
       push(acc.ar, t.total, 0, { ...ent, memo: 'Accounts receivable' });
       for (const l of lines) {
-        const item = l.item_id ? repo.get('item', l.item_id) : null;
+        const item = l.item_id ? (itemMap.get(l.item_id) || repo.get('item', l.item_id)) : null;
         const revenue = l.account_id || item?.income_account_id || (item?.type === 'service' ? acc.service_revenue : acc.product_revenue) || acc.product_revenue;
         // A line under a recognition schedule is not revenue yet. It goes to
         // the deferral account, and `applySchedules` lays down the slices that
@@ -649,7 +657,7 @@ export function postingPlan(repo, t, lines, acc) {
     case 'CREDIT_MEMO': {
       push(acc.ar, 0, t.total, { ...ent, memo: 'Credit to customer' });
       for (const l of lines) {
-        const item = l.item_id ? repo.get('item', l.item_id) : null;
+        const item = l.item_id ? (itemMap.get(l.item_id) || repo.get('item', l.item_id)) : null;
         const revenue = l.account_id || item?.income_account_id || acc.product_revenue;
         push(revenue, l.amount, 0, { ...seg(l), memo: l.description });
       }
@@ -698,7 +706,7 @@ export function postingPlan(repo, t, lines, acc) {
     }
     case 'VENDOR_BILL': {
       for (const l of lines) {
-        const item = l.item_id ? repo.get('item', l.item_id) : null;
+        const item = l.item_id ? (itemMap.get(l.item_id) || repo.get('item', l.item_id)) : null;
         const target = l.account_id
           || (item && inv.isStocked(item) ? (item.asset_account_id || acc.inventory) : (item?.expense_account_id || acc.cogs));
         // Where the bill received the stock itself, book what the stock ledger
@@ -742,7 +750,7 @@ export function postingPlan(repo, t, lines, acc) {
       for (const l of lines) {
         const cost = l._cogs || 0;
         if (!cost) continue;
-        const item = l.item_id ? repo.get('item', l.item_id) : null;
+        const item = l.item_id ? (itemMap.get(l.item_id) || repo.get('item', l.item_id)) : null;
         pushCost(item?.cogs_account_id || acc.cogs, cost, 0, { ...seg(l), memo: `COGS ${l.description}` });
         pushCost(item?.asset_account_id || acc.inventory, 0, cost, { ...seg(l), memo: `Inventory relief ${l.description}` });
       }
@@ -752,7 +760,7 @@ export function postingPlan(repo, t, lines, acc) {
       for (const l of lines) {
         const value = l._value || 0;
         if (!value) continue;
-        const item = l.item_id ? repo.get('item', l.item_id) : null;
+        const item = l.item_id ? (itemMap.get(l.item_id) || repo.get('item', l.item_id)) : null;
         pushCost(item?.asset_account_id || acc.inventory, value, 0, { ...seg(l), memo: `Received ${l.description}` });
         pushCost(acc.accrued_receipts, 0, value, { ...ent, ...seg(l), memo: 'Accrued inventory receipts' });
       }
@@ -766,7 +774,7 @@ export function postingPlan(repo, t, lines, acc) {
       for (const l of lines) {
         const cost = l._cogs || 0;
         if (!cost) continue;
-        const item = l.item_id ? repo.get('item', l.item_id) : null;
+        const item = l.item_id ? (itemMap.get(l.item_id) || repo.get('item', l.item_id)) : null;
         pushCost(item?.asset_account_id || acc.inventory, 0, cost, { ...seg(l), memo: `Returned ${l.description}` });
         relieved += inDocCurrency(cost);
       }
@@ -780,7 +788,7 @@ export function postingPlan(repo, t, lines, acc) {
       for (const l of lines) {
         const value = l._value || 0;
         if (!value) continue;
-        const item = l.item_id ? repo.get('item', l.item_id) : null;
+        const item = l.item_id ? (itemMap.get(l.item_id) || repo.get('item', l.item_id)) : null;
         const assetAccount = item?.asset_account_id || acc.inventory;
         const offset = l.account_id || acc.shrinkage;
         if (value > 0) { pushCost(assetAccount, value, 0, { ...seg(l), memo: l.description }); pushCost(offset, 0, value, { ...seg(l), memo: 'Inventory adjustment' }); }
@@ -804,91 +812,92 @@ export function postTxn(repo, id) {
 
   const acc = postingAccounts(repo);
   const lines = repo.query('SELECT * FROM txn_line WHERE tenant_id = :t AND txn_id = ? ORDER BY line_no', [id]);
+  const itemIds = [...new Set(lines.map((l) => l.item_id).filter(Boolean))];
+  const itemMap = new Map(repo.find('item', { where: { id: itemIds } }).map((i) => [i.id, i]));
 
-  // ---- stock movements first: they determine the amounts we post.
-  if (cfg.stock === 'issue') {
-    for (const l of lines) {
-      if (!l.item_id) continue;
-      const r = inv.moveStock(repo, {
-        item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: -l.quantity,
-        type: 'shipment', source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
-      });
-      l._cogs = Math.abs(r.value_delta);
+  return repo.tx(() => {
+    // ---- stock movements first: they determine the amounts we post.
+    if (cfg.stock === 'issue') {
+      for (const l of lines) {
+        if (!l.item_id) continue;
+        const r = inv.moveStock(repo, {
+          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: -l.quantity,
+          type: 'shipment', source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
+        });
+        l._cogs = Math.abs(r.value_delta);
+      }
+    } else if (cfg.stock === 'receive') {
+      for (const l of lines) {
+        if (!l.item_id) continue;
+        const r = inv.moveStock(repo, {
+          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
+          unit_cost: Money.convert(l.unit_price, t.fx_rate || 1),
+          type: 'receipt', source_type: t.type, source_id: id,
+          txn_date: t.txn_date, memo: t.txn_no,
+        });
+        l._value = r.value_delta;
+      }
+    } else if (t.type === 'VENDOR_BILL') {
+      // A bill raised straight against a vendor -- no purchase order, no item
+      // receipt -- IS the receiving event: it is how most small purchases of
+      // stock actually arrive. Without this the bill debits Inventory Asset and
+      // no stock ever appears, so the control account and the stock ledger part
+      // company on the first bill. Lines that carry an account are either
+      // clearing an accrued receipt (the goods came in already) or being
+      // expensed on purpose, and neither should move stock again.
+      for (const l of lines) {
+        if (!l.item_id || l.account_id) continue;
+        const item = itemMap.get(l.item_id);
+        if (!item || !inv.isStocked(item)) continue;
+        const baseAmount = Money.convert(l.amount, t.fx_rate || 1);
+        const netUnitCost = l.quantity ? Math.round(baseAmount * 1_000_000 / l.quantity) : 0;
+        const r = inv.moveStock(repo, {
+          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
+          unit_cost: netUnitCost, type: 'receipt', source_type: t.type, source_id: id,
+          txn_date: t.txn_date, memo: t.txn_no,
+        });
+        l._value = r.value_delta;
+      }
+    } else if (cfg.stock === 'adjust') {
+      for (const l of lines) {
+        if (!l.item_id) continue;
+        const r = inv.moveStock(repo, {
+          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
+          unit_cost: l.unit_cost || undefined, type: 'adjustment', source_type: t.type, source_id: id,
+          txn_date: t.txn_date, memo: t.memo || t.txn_no,
+        });
+        l._value = r.value_delta;
+      }
     }
-  } else if (cfg.stock === 'receive') {
-    for (const l of lines) {
-      if (!l.item_id) continue;
-      const r = inv.moveStock(repo, {
-        item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
-        // The stock ledger is kept in the subsidiary's own currency, because
-        // that is the only way it can tie to the inventory account. Goods
-        // bought in euros are carried at what the euros cost.
-        unit_cost: Money.convert(l.unit_price, t.fx_rate || 1),
-        type: 'receipt', source_type: t.type, source_id: id,
-        txn_date: t.txn_date, memo: t.txn_no,
-      });
-      l._value = r.value_delta;
+
+    const journalLines = postingPlan(repo, t, lines, acc, itemMap);
+    if (!journalLines.length) {
+      repo.update('txn', id, { posted: 1, updated_at: nowIso() });
+      return getTxn(repo, id);
     }
-  } else if (t.type === 'VENDOR_BILL') {
-    // A bill raised straight against a vendor -- no purchase order, no item
-    // receipt -- IS the receiving event: it is how most small purchases of
-    // stock actually arrive. Without this the bill debits Inventory Asset and
-    // no stock ever appears, so the control account and the stock ledger part
-    // company on the first bill. Lines that carry an account are either
-    // clearing an accrued receipt (the goods came in already) or being
-    // expensed on purpose, and neither should move stock again.
-    for (const l of lines) {
-      if (!l.item_id || l.account_id) continue;
-      const item = repo.get('item', l.item_id);
-      if (!inv.isStocked(item)) continue;
-      const baseAmount = Money.convert(l.amount, t.fx_rate || 1);
-      const netUnitCost = l.quantity ? Math.round(baseAmount * 1_000_000 / l.quantity) : 0;
-      const r = inv.moveStock(repo, {
-        item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
-        unit_cost: netUnitCost, type: 'receipt', source_type: t.type, source_id: id,
-        txn_date: t.txn_date, memo: t.txn_no,
-      });
-      l._value = r.value_delta;
-    }
-  } else if (cfg.stock === 'adjust') {
-    for (const l of lines) {
-      if (!l.item_id) continue;
-      const r = inv.moveStock(repo, {
-        item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
-        unit_cost: l.unit_cost || undefined, type: 'adjustment', source_type: t.type, source_id: id,
-        txn_date: t.txn_date, memo: t.memo || t.txn_no,
-      });
-      l._value = r.value_delta;
-    }
-  }
 
-  const journalLines = postingPlan(repo, t, lines, acc);
-  if (!journalLines.length) {
-    repo.update('txn', id, { posted: 1, updated_at: nowIso() });
-    return getTxn(repo, id);
-  }
-
-  const entry = gl.postJournal(repo, {
-    subsidiary_id: t.subsidiary_id, txn_date: t.txn_date, currency: t.currency, fx_rate: t.fx_rate,
-    memo: `${cfg.label} ${t.txn_no}${t.memo ? ' — ' + t.memo : ''}`,
-    source_type: t.type.toLowerCase(), source_id: id, lines: journalLines,
-  });
-
-  repo.update('txn', id, { posted: 1, journal_entry_id: entry.id, period_id: entry.period_id, updated_at: nowIso() });
-
-  // The deferral is on the books; now record what will release it. This runs
-  // after the journal on purpose -- a schedule for a document that failed to
-  // post would be a promise about money nobody owes.
-  for (const l of lines) {
-    if (!l._defer) continue;
-    schedules.createFromLine(repo, {
-      txn: t, line: l, item: l._defer.item, kind: l._defer.kind,
-      template: l._defer.template, targetAccount: l._defer.target, deferralAccount: l._defer.deferral,
+    const entry = gl.postJournal(repo, {
+      subsidiary_id: t.subsidiary_id, txn_date: t.txn_date, currency: t.currency, fx_rate: t.fx_rate,
+      memo: `${cfg.label} ${t.txn_no}${t.memo ? ' — ' + t.memo : ''}`,
+      source_type: t.type.toLowerCase(), source_id: id, lines: journalLines,
     });
-  }
 
-  audit.record(repo, { recordType: PERM_FOR[t.type], recordId: id, action: 'post', changes: { journal_entry: { from: null, to: entry.entry_no } } });
-  return getTxn(repo, id);
+    repo.update('txn', id, { posted: 1, journal_entry_id: entry.id, period_id: entry.period_id, updated_at: nowIso() });
+
+    // The deferral is on the books; now record what will release it. This runs
+    // after the journal on purpose -- a schedule for a document that failed to
+    // post would be a promise about money nobody owes.
+    for (const l of lines) {
+      if (!l._defer) continue;
+      schedules.createFromLine(repo, {
+        txn: t, line: l, item: l._defer.item, kind: l._defer.kind,
+        template: l._defer.template, targetAccount: l._defer.target, deferralAccount: l._defer.deferral,
+      });
+    }
+
+    audit.record(repo, { recordType: PERM_FOR[t.type], recordId: id, action: 'post', changes: { journal_entry: { from: null, to: entry.entry_no } } });
+    return getTxn(repo, id);
+  });
 }
 
 /** Void a posted document: reverse its journal and undo its stock movement. */
@@ -906,27 +915,45 @@ export function voidTxn(repo, id, { reason = '' } = {}) {
   if (released > 0) {
     throw unprocessable(`${t.txn_no} has ${Money.format(released, t.currency)} already recognised from its schedule. Raise a credit memo instead of voiding it.`);
   }
-  schedules.cancelForTxn(repo, id, { reason: reason || `Void of ${t.txn_no}` });
 
-  if (t.posted && t.journal_entry_id) gl.reverseJournal(repo, t.journal_entry_id, { memo: `Void of ${t.txn_no}${reason ? ' — ' + reason : ''}` });
+  return repo.tx(() => {
+    schedules.cancelForTxn(repo, id, { reason: reason || `Void of ${t.txn_no}` });
 
-  // Reverse stock movements recorded against this document.
-  if (cfg.stock) {
-    const moves = repo.query('SELECT * FROM inventory_txn WHERE tenant_id = :t AND source_type = ? AND source_id = ?', [t.type, id]);
-    for (const m of moves) {
-      inv.moveStock(repo, {
-        item_id: m.item_id, location_id: m.location_id, qty_delta: -m.qty_delta,
-        unit_cost: m.unit_cost, type: 'adjustment', source_type: 'void', source_id: id,
-        txn_date: today(), memo: `Void of ${t.txn_no}`,
-      });
+    if (t.posted && t.journal_entry_id) gl.reverseJournal(repo, t.journal_entry_id, { memo: `Void of ${t.txn_no}${reason ? ' — ' + reason : ''}` });
+
+    // Reverse stock movements recorded against this document.
+    if (cfg.stock) {
+      const moves = repo.query('SELECT * FROM inventory_txn WHERE tenant_id = :t AND source_type = ? AND source_id = ?', [t.type, id]);
+      if (moves.length) {
+        const itemIds = [...new Set(moves.map((m) => m.item_id).filter(Boolean))];
+        const itemMap = new Map(repo.find('item', { where: { id: itemIds } }).map((i) => [i.id, i]));
+
+        const locationIds = [...new Set(moves.map((m) => m.location_id).filter(Boolean))];
+        const positions = itemIds.length && locationIds.length
+          ? repo.query(`SELECT * FROM item_location WHERE tenant_id = :t
+              AND item_id IN (${itemIds.map(() => '?').join(',')})
+              AND location_id IN (${locationIds.map(() => '?').join(',')})`,
+            [...itemIds, ...locationIds])
+          : [];
+        const posMap = new Map(positions.map((p) => [p.item_id + '|' + p.location_id, p]));
+
+        for (const m of moves) {
+          inv.moveStock(repo, {
+            item_id: m.item_id, location_id: m.location_id, qty_delta: -m.qty_delta,
+            unit_cost: m.unit_cost, type: 'adjustment', source_type: 'void', source_id: id,
+            txn_date: today(), memo: `Void of ${t.txn_no}`,
+            item: itemMap.get(m.item_id), pos: posMap.get(m.item_id + '|' + m.location_id),
+          });
+        }
+      }
     }
-  }
-  if (cfg.commits && ['open', 'partially_fulfilled'].includes(t.status)) commitLines(repo, id, -1);
-  if (cfg.onOrder && ['open', 'partially_received'].includes(t.status)) onOrderLines(repo, id, -1);
+    if (cfg.commits && ['open', 'partially_fulfilled'].includes(t.status)) commitLines(repo, id, -1);
+    if (cfg.onOrder && ['open', 'partially_received'].includes(t.status)) onOrderLines(repo, id, -1);
 
-  repo.update('txn', id, { status: 'voided', amount_remaining: 0, updated_at: nowIso() });
-  audit.record(repo, { recordType: PERM_FOR[t.type], recordId: id, action: 'void', changes: { reason: { from: null, to: reason }, status: { from: t.status, to: 'voided' } } });
-  return getTxn(repo, id);
+    repo.update('txn', id, { status: 'voided', amount_remaining: 0, updated_at: nowIso() });
+    audit.record(repo, { recordType: PERM_FOR[t.type], recordId: id, action: 'void', changes: { reason: { from: null, to: reason }, status: { from: t.status, to: 'voided' } } });
+    return getTxn(repo, id);
+  });
 }
 
 // ================================================================
@@ -1065,68 +1092,70 @@ export function transform(repo, sourceId, targetType, input = {}) {
   }
   if (!newLines.length) throw unprocessable(`Nothing remains on ${src.txn_no} to turn into a ${cfg.label}.`);
 
-  const created = createTxn(repo, targetType, {
-    entity_id: src.entity_id, subsidiary_id: src.subsidiary_id, currency: src.currency,
-    txn_date: input.txn_date || today(),
-    location_id: input.location_id || src.location_id,
-    department_id: src.department_id, class_id: src.class_id,
-    memo: input.memo || src.memo, reference: input.reference || src.txn_no,
-    terms: input.terms || src.terms,
-    shipping_total: input.shipping_total ?? (targetType === 'INVOICE' ? src.shipping_total : 0),
-    discount_total: input.discount_total ?? 0,
-    billing_address: src.billing_address, shipping_address: src.shipping_address,
-    ship_method: input.ship_method || src.ship_method, tracking_no: input.tracking_no || '',
-    sales_rep_id: src.sales_rep_id, opportunity_id: src.opportunity_id,
-    source_txn_id: src.id, price_level_id: src.price_level_id,
-    lines: newLines, custom: input.custom || {},
-  }, { autoPost: input.autoPost !== false, skipApproval: input.skipApproval ?? (targetType === 'FULFILLMENT' || targetType === 'ITEM_RECEIPT') });
+  return repo.tx(() => {
+    const created = createTxn(repo, targetType, {
+      entity_id: src.entity_id, subsidiary_id: src.subsidiary_id, currency: src.currency,
+      txn_date: input.txn_date || today(),
+      location_id: input.location_id || src.location_id,
+      department_id: src.department_id, class_id: src.class_id,
+      memo: input.memo || src.memo, reference: input.reference || src.txn_no,
+      terms: input.terms || src.terms,
+      shipping_total: input.shipping_total ?? (targetType === 'INVOICE' ? src.shipping_total : 0),
+      discount_total: input.discount_total ?? 0,
+      billing_address: src.billing_address, shipping_address: src.shipping_address,
+      ship_method: input.ship_method || src.ship_method, tracking_no: input.tracking_no || '',
+      sales_rep_id: src.sales_rep_id, opportunity_id: src.opportunity_id,
+      source_txn_id: src.id, price_level_id: src.price_level_id,
+      lines: newLines, custom: input.custom || {},
+    }, { autoPost: input.autoPost !== false, skipApproval: input.skipApproval ?? (targetType === 'FULFILLMENT' || targetType === 'ITEM_RECEIPT') });
 
-  // ---- link and advance the source
-  repo.insert('txn_link', {
-    id: ulid(), from_txn_id: src.id, to_txn_id: created.id,
-    link_type: targetType === 'FULFILLMENT' ? 'fulfils' : targetType === 'ITEM_RECEIPT' ? 'receives'
-      : ['INVOICE', 'VENDOR_BILL'].includes(targetType) ? 'bills' : 'derives',
-    amount: created.total, created_at: nowIso(),
-  });
+    // ---- link and advance the source
+    repo.insert('txn_link', {
+      id: ulid(), from_txn_id: src.id, to_txn_id: created.id,
+      link_type: targetType === 'FULFILLMENT' ? 'fulfils' : targetType === 'ITEM_RECEIPT' ? 'receives'
+        : ['INVOICE', 'VENDOR_BILL'].includes(targetType) ? 'bills' : 'derives',
+      amount: created.total, created_at: nowIso(),
+    });
 
-  // Without recording progress the source never closes, and the same invoice
-  // could be credited — or the same bill returned — over and over.
-  const progressField = targetType === 'FULFILLMENT' ? 'qty_fulfilled'
-    : targetType === 'ITEM_RECEIPT' ? 'qty_received'
-    : ['INVOICE', 'VENDOR_BILL'].includes(targetType) ? 'qty_billed'
-    : ['CREDIT_MEMO', 'RETURN_AUTH', 'VENDOR_RETURN'].includes(targetType) ? 'qty_returned'
-    : targetType === 'PURCHASE_ORDER' ? 'qty_ordered' : null;
+    // Without recording progress the source never closes, and the same invoice
+    // could be credited — or the same bill returned — over and over.
+    const progressField = targetType === 'FULFILLMENT' ? 'qty_fulfilled'
+      : targetType === 'ITEM_RECEIPT' ? 'qty_received'
+      : ['INVOICE', 'VENDOR_BILL'].includes(targetType) ? 'qty_billed'
+      : ['CREDIT_MEMO', 'RETURN_AUTH', 'VENDOR_RETURN'].includes(targetType) ? 'qty_returned'
+      : targetType === 'PURCHASE_ORDER' ? 'qty_ordered' : null;
 
-  if (progressField) {
-    for (const cl of created.lines) {
-      if (!cl.source_line_id) continue;
-      const sl = src.lines.find((x) => x.id === cl.source_line_id);
-      if (!sl) continue;
-      repo.exec(`UPDATE txn_line SET ${progressField} = ${progressField} + ? WHERE tenant_id = :t AND id = ?`, [cl.quantity, sl.id]);
-      // Shipping releases the reservation it was holding.
-      if (targetType === 'FULFILLMENT' && sl.item_id) inv.release(repo, sl.item_id, sl.location_id || src.location_id, cl.quantity);
-      if (targetType === 'ITEM_RECEIPT' && sl.item_id) inv.changeOnOrder(repo, sl.item_id, sl.location_id || src.location_id, -cl.quantity);
-    }
-    // Cascade billing progress from a receipt back onto its purchase order.
-    if (targetType === 'VENDOR_BILL' && src.type === 'ITEM_RECEIPT' && src.source_txn_id) {
+    if (progressField) {
       for (const cl of created.lines) {
-        const rl = src.lines.find((x) => x.id === cl.source_line_id);
-        if (rl?.source_line_id) repo.exec('UPDATE txn_line SET qty_billed = qty_billed + ? WHERE tenant_id = :t AND id = ?', [cl.quantity, rl.source_line_id]);
+        if (!cl.source_line_id) continue;
+        const sl = src.lines.find((x) => x.id === cl.source_line_id);
+        if (!sl) continue;
+        repo.exec(`UPDATE txn_line SET ${progressField} = ${progressField} + ? WHERE tenant_id = :t AND id = ?`, [cl.quantity, sl.id]);
+        // Shipping releases the reservation it was holding.
+        if (targetType === 'FULFILLMENT' && sl.item_id) inv.release(repo, sl.item_id, sl.location_id || src.location_id, cl.quantity);
+        if (targetType === 'ITEM_RECEIPT' && sl.item_id) inv.changeOnOrder(repo, sl.item_id, sl.location_id || src.location_id, -cl.quantity);
       }
-      refreshStatus(repo, src.source_txn_id);
+      // Cascade billing progress from a receipt back onto its purchase order.
+      if (targetType === 'VENDOR_BILL' && src.type === 'ITEM_RECEIPT' && src.source_txn_id) {
+        for (const cl of created.lines) {
+          const rl = src.lines.find((x) => x.id === cl.source_line_id);
+          if (rl?.source_line_id) repo.exec('UPDATE txn_line SET qty_billed = qty_billed + ? WHERE tenant_id = :t AND id = ?', [cl.quantity, rl.source_line_id]);
+        }
+        refreshStatus(repo, src.source_txn_id);
+      }
     }
-  }
-  if (src.type === 'QUOTE' && targetType === 'SALES_ORDER') {
-    repo.update('txn', src.id, { status: 'closed', updated_at: nowIso() });
-  } else {
-    refreshStatus(repo, src.id);
-  }
+    if (src.type === 'QUOTE' && targetType === 'SALES_ORDER') {
+      repo.update('txn', src.id, { status: 'closed', updated_at: nowIso() });
+    } else {
+      refreshStatus(repo, src.id);
+    }
 
-  audit.record(repo, {
-    recordType: PERM_FOR[src.type], recordId: src.id, action: 'transform',
-    changes: { created: { from: null, to: `${created.txn_no} (${cfg.label})` } },
+    audit.record(repo, {
+      recordType: PERM_FOR[src.type], recordId: src.id, action: 'transform',
+      changes: { created: { from: null, to: `${created.txn_no} (${cfg.label})` } },
+    });
+    return created;
   });
-  return created;
 }
 
 /** Recompute a document's lifecycle status from its line progress. */
@@ -1136,7 +1165,9 @@ export function refreshStatus(repo, id) {
   const lines = repo.query('SELECT * FROM txn_line WHERE tenant_id = :t AND txn_id = ?', [id]);
   if (!lines.length) return t;
 
-  const stockLines = lines.filter((l) => { const it = l.item_id ? repo.get('item', l.item_id) : null; return it && inv.isStocked(it); });
+  const stockItemIds = [...new Set(lines.map((l) => l.item_id).filter(Boolean))];
+  const itemMap = new Map(repo.find('item', { where: { id: stockItemIds } }).map((i) => [i.id, i]));
+  const stockLines = lines.filter((l) => { const it = l.item_id ? itemMap.get(l.item_id) : null; return it && inv.isStocked(it); });
   const fully = (arr, field) => arr.length > 0 && arr.every((l) => (l[field] || 0) >= l.quantity || l.is_closed);
   const partly = (arr, field) => arr.some((l) => (l[field] || 0) > 0);
 
@@ -1236,43 +1267,46 @@ export function createPayment(repo, type, input) {
   const now = nowIso();
   const id = ulid();
   const txnNo = input.txn_no || nextNumber(repo, cfg.sequence);
-  repo.insert('txn', {
-    id, type, txn_no: txnNo, txn_date: txnDate,
-    entity_type: cfg.entity, entity_id: entity.id, subsidiary_id: subsidiaryId,
-    currency, fx_rate: fxRate, memo: input.memo || '', reference: input.reference || '',
-    status: appliedTotal < amount ? 'partially_applied' : 'closed',
-    approval_status: 'not_required',
-    subtotal: amount, discount_total: 0, tax_total: 0, shipping_total: 0,
-    total: amount, base_total: Money.convert(amount, fxRate),
-    amount_applied: appliedTotal, amount_remaining: amount - appliedTotal,
-    terms: 'DUE_ON_RECEIPT', due_date: txnDate,
-    custom: {
-      ...(input.custom || {}),
-      bank_account_id: input.bank_account_id ?? input.custom?.bank_account_id ?? null,
-      undeposited: (input.undeposited ?? input.custom?.undeposited) ? 1 : 0,
-      payment_method: input.payment_method || input.custom?.payment_method || 'transfer',
-    },
-    created_at: now, created_by: repo.ctx?.user?.id || null, updated_at: now,
-    posted: 0, journal_entry_id: null, period_id: null, probability: 100,
-  });
 
-  for (const { target, amount: amt } of targets) {
-    repo.insert('txn_link', { id: ulid(), from_txn_id: id, to_txn_id: target.id, link_type: 'applied', amount: amt, created_at: now });
-    const newApplied = (target.amount_applied || 0) + amt;
-    const newRemaining = target.total - newApplied;
-    repo.update('txn', target.id, {
-      amount_applied: newApplied, amount_remaining: newRemaining,
-      status: newRemaining <= 0 ? 'paid' : 'partially_paid', updated_at: now,
+  return repo.tx(() => {
+    repo.insert('txn', {
+      id, type, txn_no: txnNo, txn_date: txnDate,
+      entity_type: cfg.entity, entity_id: entity.id, subsidiary_id: subsidiaryId,
+      currency, fx_rate: fxRate, memo: input.memo || '', reference: input.reference || '',
+      status: appliedTotal < amount ? 'partially_applied' : 'closed',
+      approval_status: 'not_required',
+      subtotal: amount, discount_total: 0, tax_total: 0, shipping_total: 0,
+      total: amount, base_total: Money.convert(amount, fxRate),
+      amount_applied: appliedTotal, amount_remaining: amount - appliedTotal,
+      terms: 'DUE_ON_RECEIPT', due_date: txnDate,
+      custom: {
+        ...(input.custom || {}),
+        bank_account_id: input.bank_account_id ?? input.custom?.bank_account_id ?? null,
+        undeposited: (input.undeposited ?? input.custom?.undeposited) ? 1 : 0,
+        payment_method: input.payment_method || input.custom?.payment_method || 'transfer',
+      },
+      created_at: now, created_by: repo.ctx?.user?.id || null, updated_at: now,
+      posted: 0, journal_entry_id: null, period_id: null, probability: 100,
     });
-  }
 
-  audit.record(repo, {
-    recordType: PERM_FOR[type], recordId: id, action: 'create',
-    changes: { txn_no: { from: null, to: txnNo }, amount: { from: null, to: Money.toNumber(amount) }, applied_to: { from: null, to: targets.map((x) => x.target.txn_no).join(', ') } },
+    for (const { target, amount: amt } of targets) {
+      repo.insert('txn_link', { id: ulid(), from_txn_id: id, to_txn_id: target.id, link_type: 'applied', amount: amt, created_at: now });
+      const newApplied = (target.amount_applied || 0) + amt;
+      const newRemaining = target.total - newApplied;
+      repo.update('txn', target.id, {
+        amount_applied: newApplied, amount_remaining: newRemaining,
+        status: newRemaining <= 0 ? 'paid' : 'partially_paid', updated_at: now,
+      });
+    }
+
+    audit.record(repo, {
+      recordType: PERM_FOR[type], recordId: id, action: 'create',
+      changes: { txn_no: { from: null, to: txnNo }, amount: { from: null, to: Money.toNumber(amount) }, applied_to: { from: null, to: targets.map((x) => x.target.txn_no).join(', ') } },
+    });
+    reindexTxn(repo, id);
+    postTxn(repo, id);
+    return getTxn(repo, id);
   });
-  reindexTxn(repo, id);
-  postTxn(repo, id);
-  return getTxn(repo, id);
 }
 
 /** Remove an application, restoring the target's outstanding balance. */
@@ -1282,19 +1316,21 @@ export function unapplyPayment(repo, paymentId, targetTxnId) {
   const payment = requireTxn(repo, paymentId);
   const target = requireTxn(repo, targetTxnId);
 
-  repo.remove('txn_link', link.id);
-  const targetApplied = Math.max(0, (target.amount_applied || 0) - link.amount);
-  repo.update('txn', targetTxnId, {
-    amount_applied: targetApplied, amount_remaining: target.total - targetApplied,
-    status: targetApplied <= 0 ? 'open' : 'partially_paid', updated_at: nowIso(),
+  return repo.tx(() => {
+    repo.remove('txn_link', link.id);
+    const targetApplied = Math.max(0, (target.amount_applied || 0) - link.amount);
+    repo.update('txn', targetTxnId, {
+      amount_applied: targetApplied, amount_remaining: target.total - targetApplied,
+      status: targetApplied <= 0 ? 'open' : 'partially_paid', updated_at: nowIso(),
+    });
+    const payApplied = Math.max(0, (payment.amount_applied || 0) - link.amount);
+    repo.update('txn', paymentId, {
+      amount_applied: payApplied, amount_remaining: payment.total - payApplied,
+      status: payApplied <= 0 ? 'open' : 'partially_applied', updated_at: nowIso(),
+    });
+    audit.record(repo, { recordType: PERM_FOR[payment.type], recordId: paymentId, action: 'unapply', changes: { target: { from: target.txn_no, to: null }, amount: { from: Money.toNumber(link.amount), to: 0 } } });
+    return getTxn(repo, paymentId);
   });
-  const payApplied = Math.max(0, (payment.amount_applied || 0) - link.amount);
-  repo.update('txn', paymentId, {
-    amount_applied: payApplied, amount_remaining: payment.total - payApplied,
-    status: payApplied <= 0 ? 'open' : 'partially_applied', updated_at: nowIso(),
-  });
-  audit.record(repo, { recordType: PERM_FOR[payment.type], recordId: paymentId, action: 'unapply', changes: { target: { from: target.txn_no, to: null }, amount: { from: Money.toNumber(link.amount), to: 0 } } });
-  return getTxn(repo, paymentId);
 }
 
 /** Open documents a payment could be applied to. */

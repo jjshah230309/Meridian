@@ -200,29 +200,31 @@ export function fileReturn(repo, input = {}) {
   const id = ulid();
   const returnNo = nextNumber(repo, 'tax_return');
   const now = nowIso();
-  repo.insert('tax_return', {
-    id, return_no: returnNo, subsidiary_id: view.subsidiary_id, country: view.country,
-    currency: view.currency, period_from: view.period_from, period_to: view.period_to,
-    sales_net: view.sales_net, output_tax: view.output_tax,
-    purchases_net: view.purchases_net, input_tax: view.input_tax, net_tax: view.net_tax,
-    late_count: view.late_count, late_tax: view.late_tax, txn_count: view.txn_count,
-    status: 'filed', reference: input.reference || '', note: input.note || '',
-    created_at: now, created_by: repo.ctx?.user?.id || null,
-    filed_at: now, filed_by: repo.ctx?.user?.id || null,
-  });
-  for (const l of view.lines) repo.insert('tax_return_line', { id: ulid(), return_id: id, ...l });
-  for (const d of view.documents) repo.update('txn', d.txn_id, { tax_return_id: id });
+  return repo.tx(() => {
+    repo.insert('tax_return', {
+      id, return_no: returnNo, subsidiary_id: view.subsidiary_id, country: view.country,
+      currency: view.currency, period_from: view.period_from, period_to: view.period_to,
+      sales_net: view.sales_net, output_tax: view.output_tax,
+      purchases_net: view.purchases_net, input_tax: view.input_tax, net_tax: view.net_tax,
+      late_count: view.late_count, late_tax: view.late_tax, txn_count: view.txn_count,
+      status: 'filed', reference: input.reference || '', note: input.note || '',
+      created_at: now, created_by: repo.ctx?.user?.id || null,
+      filed_at: now, filed_by: repo.ctx?.user?.id || null,
+    });
+    for (const l of view.lines) repo.insert('tax_return_line', { id: ulid(), return_id: id, ...l });
+    for (const d of view.documents) repo.update('txn', d.txn_id, { tax_return_id: id });
 
-  audit.record(repo, {
-    recordType: 'tax_return', recordId: id, action: 'file',
-    changes: {
-      return_no: { from: null, to: returnNo },
-      period: { from: null, to: `${view.period_from} to ${view.period_to}` },
-      net_tax: { from: null, to: Money.toNumber(view.net_tax) },
-      transactions: { from: 0, to: view.txn_count },
-    },
+    audit.record(repo, {
+      recordType: 'tax_return', recordId: id, action: 'file',
+      changes: {
+        return_no: { from: null, to: returnNo },
+        period: { from: null, to: `${view.period_from} to ${view.period_to}` },
+        net_tax: { from: null, to: Money.toNumber(view.net_tax) },
+        transactions: { from: 0, to: view.txn_count },
+      },
+    });
+    return getReturn(repo, id);
   });
-  return getReturn(repo, id);
 }
 
 /**
@@ -239,13 +241,15 @@ export function unfileReturn(repo, id, { reason = '' } = {}) {
   if (later) {
     throw conflict(`${later.return_no} covers a later period and was filed after this one. Unfile that first, or the two would overlap.`);
   }
-  repo.exec('UPDATE txn SET tax_return_id = NULL WHERE tenant_id = :t AND tax_return_id = ?', [id]);
-  repo.update('tax_return', id, { status: 'draft', filed_at: null, filed_by: null });
-  audit.record(repo, {
-    recordType: 'tax_return', recordId: id, action: 'unfile',
-    changes: { status: { from: 'filed', to: 'draft' }, reason: { from: null, to: reason || 'Filed in error' } },
+  return repo.tx(() => {
+    repo.exec('UPDATE txn SET tax_return_id = NULL WHERE tenant_id = :t AND tax_return_id = ?', [id]);
+    repo.update('tax_return', id, { status: 'draft', filed_at: null, filed_by: null });
+    audit.record(repo, {
+      recordType: 'tax_return', recordId: id, action: 'unfile',
+      changes: { status: { from: 'filed', to: 'draft' }, reason: { from: null, to: reason || 'Filed in error' } },
+    });
+    return getReturn(repo, id);
   });
-  return getReturn(repo, id);
 }
 
 export function returnPdf(repo, id) {

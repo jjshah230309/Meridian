@@ -159,6 +159,7 @@ export const RECORDS = {
       F('bank_name', 'Bank', 'text', { width: 160 }),
       F('number_masked', 'Account (last 4)', 'text', { width: 120, help: 'Store only the last four digits. Full account numbers belong with your bank.' }),
       F('currency', 'Currency', 'select', { width: 90 }),
+      F('date_format', 'Statement date format', 'select', { options: ['DMY', 'MDY', 'YMD'], default: 'DMY', width: 140, help: 'How dates are parsed from imported statements.' }),
       F('active', 'Active', 'checkbox', { width: 70 }),
     ],
     listColumns: ['name', 'bank_name', 'number_masked', 'currency', 'active'],
