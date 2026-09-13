@@ -146,6 +146,15 @@ lines against payments and receipts by amount, date and reference. What matches
 is proposed; what does not is left for you. A reconciliation locks the matched
 set against a closing balance.
 
+A CSV has no fixed way of writing a date, so each bank account has a
+**statement date format** — auto, DMY, MDY or YMD — set on it; the other
+import formats spell the date out unambiguously and need no setting. Leave it
+on **auto** and
+Meridian works it out from the file itself where the day and month values make
+that possible (`13/02/2026` can only be DMY); it asks you to choose when a
+file is genuinely ambiguous, such as every date falling in the first twelve
+days of the month.
+
 ## Closing the books
 
 At the year end, **retained earnings roll-forward** closes income and expense

@@ -145,7 +145,7 @@ function inferDateFormat(text, split) {
 }
 
 /** Parse a CSV statement. Header row required; column names are flexible. */
-export function parseStatementCsv(text, { dateFormat = 'DMY' } = {}) {
+export function parseStatementCsv(text, { dateFormat = 'auto' } = {}) {
   const rows = [];
   const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
   if (!lines.length) return rows;
@@ -174,7 +174,7 @@ export function parseStatementCsv(text, { dateFormat = 'DMY' } = {}) {
   if (dateFormat === 'auto') {
     activeFormat = inferDateFormat(text, split);
     if (!activeFormat || activeFormat === 'ambiguous') {
-      throw new ValidationError(`Could not determine date format from CSV. It is either ambiguous or invalid. Please specify 'DMY' or 'MDY'.`);
+      throw new ValidationError({}, `Could not determine date format from CSV. It is either ambiguous or invalid. Please specify DMY, MDY or YMD on the bank account.`);
     }
   }
 

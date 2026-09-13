@@ -46,7 +46,7 @@ to put on the figures you watch. Each person's arrangement is their own.
 |---|---|
 | CSV | Anything, anywhere |
 | XLSX | A formatted workbook with the numbers as numbers |
-| PDF | The financial statements pack, statements, remittances, letters |
+| PDF | Any list or report on screen, plus the financial statements pack, statements, remittances, letters |
 | JSON | Feeding another system |
 
 **Power BI, Excel and ODBC** connect to a live feed rather than a file. Meridian
