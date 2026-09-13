@@ -15,7 +15,7 @@ import { h, mount, clear } from './dom.js';
 import { icon, hasIcon } from './icons.js';
 import * as store from './store.js';
 
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 export const MOD = isMac ? '⌘' : 'Ctrl';
 const SYMBOL = {
   mod: MOD, shift: '⇧', alt: isMac ? '⌥' : 'Alt',

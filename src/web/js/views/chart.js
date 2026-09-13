@@ -69,7 +69,7 @@ export async function chartView(_route, { go }) {
         h('button.btn.sm', { onclick: () => { collapsed.clear(); store.setPref('coa.collapsed', []); draw(); } }, 'Expand all'),
         h('div.row', { style: { gap: '4px' } },
           h('button.btn.sm', { onclick: () => API.exportCsv('account').catch(notifyError) }, icon('download', { size: 13 }), 'CSV'),
-          h('button.btn.sm', { onclick: () => API.exportFile('account', 'pdf').catch(notifyError) }, 'PDF')),
+          h('button.btn.sm', { onclick: () => API.exportFile('account', 'pdf').catch(notifyError) }, 'PDF'))),
       h('div.grid-wrap',
         h('table.grid',
           h('thead', h('tr', h('th', { style: { width: '150px' } }, 'Number'), h('th', 'Name'), h('th', { style: { width: '190px' } }, 'Type'), h('th.num', { style: { width: '160px' } }, 'Balance'))),

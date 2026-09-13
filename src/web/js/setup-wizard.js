@@ -32,9 +32,19 @@ export async function renderSetup(app, onDone) {
   const currency = h('select', ...state.currencies.map((c) =>
     h('option', { value: c.code, selected: c.code === 'USD' }, `${c.code} — ${c.name}`)));
 
+  // A business's books can start decades before the software does, so this
+  // takes any year rather than the last/this/next-year dropdown it used to
+  // be — 1900 is a floor, not a claim that anyone will actually reach it.
   const thisYear = new Date().getFullYear();
-  const fiscalYear = h('select', ...[thisYear - 1, thisYear, thisYear + 1].map((y) =>
-    h('option', { value: y, selected: y === thisYear }, String(y))));
+  const fiscalYear = h('input', { type: 'number', min: 1900, max: thisYear + 1, step: 1, value: thisYear, required: true });
+  const fiscalYearHelp = h('div.help');
+  const describeFiscalYear = () => {
+    const y = Number(fiscalYear.value) || thisYear;
+    fiscalYearHelp.textContent = `Accounting periods are created for ${y - 1} through ${y + 1}. `
+      + `The year starts in ${MONTHS[0]}; you can change that in Setup afterwards.`;
+  };
+  fiscalYear.addEventListener('input', describeFiscalYear);
+  describeFiscalYear();
 
   // Picking a country is a much better guess at the currency than leaving it
   // on dollars, but it stays editable.
@@ -106,9 +116,7 @@ export async function renderSetup(app, onDone) {
     h('div.setup-row',
       h('div.field', h('label', 'Country'), country),
       h('div.field', h('label', 'Base currency'), currency)),
-    h('div.field', h('label', 'First financial year'), fiscalYear,
-      h('div.help', `Accounting periods are created for ${thisYear - 1} through ${thisYear + 1}. `
-        + `The year starts in ${MONTHS[0]}; you can change that in Setup afterwards.`)),
+    h('div.field', h('label', 'First financial year'), fiscalYear, fiscalYearHelp),
 
     h('div.setup-section', 'Your administrator account'),
     h('div.field', h('label', 'Your name'), fullName),

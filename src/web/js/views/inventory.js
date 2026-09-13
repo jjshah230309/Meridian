@@ -141,7 +141,7 @@ export async function inventoryView(_route, { go }) {
           'Reorder point is the greater of the configured value and demand × lead time + safety stock'),
         h('div.actions', h('div.row', { style: { gap: '4px' } },
           h('button.btn.sm', { onclick: () => API.exportCsv('item').catch(notifyError) }, icon('download', { size: 13 }), 'CSV'),
-          h('button.btn.sm', { onclick: () => API.exportFile('item', 'pdf').catch(notifyError) }, 'PDF'))),
+          h('button.btn.sm', { onclick: () => API.exportFile('item', 'pdf').catch(notifyError) }, 'PDF')))),
       suggestions.length
         ? h('div.grid-wrap', h('table.grid',
           h('thead', h('tr',

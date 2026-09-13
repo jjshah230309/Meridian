@@ -236,7 +236,7 @@ export async function listView(route, { go }) {
     h('button.btn.sm', { onclick: saveCurrentSearch, title: 'Save this filter and column set' }, '☆ Save view'),
     h('div.row', { style: { gap: '4px' } },
       h('button.btn.sm', { onclick: () => API.exportCsv(type, { columns: state.columns, filters: state.filters, sort: state.sort }).catch(notifyError) }, icon('download', { size: 13 }), 'CSV'),
-      h('button.btn.sm', { onclick: () => API.exportFile(type, 'pdf', { columns: state.columns, filters: state.filters, sort: state.sort }).catch(notifyError) }, 'PDF')),
+      h('button.btn.sm', { onclick: () => API.exportFile(type, 'pdf', { columns: state.columns, filters: state.filters, sort: state.sort }).catch(notifyError) }, 'PDF')));
 
   const el = h('div.page.flush',
     h('div', { style: { padding: '16px 20px 0' } },

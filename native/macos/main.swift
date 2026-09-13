@@ -105,6 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     private var appURL: URL?
     private var isQuitting = false
     private var didLoadOnce = false
+    // The frame a tiling command last replaced, so "Return to Previous Size"
+    // has something to return to. macOS's own system tiling (fn-⌃-F and
+    // friends) remembers this itself; ours does the same for the ⌘⌃ menu
+    // shortcuts below, which exist for keyboards with no Globe/fn key.
+    private var frameBeforeTile: NSRect?
 
     private let resources = Bundle.main.resourceURL!
 
@@ -573,6 +578,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowMenu.addItem(withTitle: "Minimise", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(NSMenuItem.separator())
+
+        // macOS's own Window Tiling (fn-⌃-F and friends, System Settings ›
+        // Desktop & Dock) already does all of this system-wide for any
+        // resizable window, no app code required. These duplicate it on ⌘⌃
+        // so it also works from a keyboard with no Globe/fn key, and so it
+        // shows up here rather than only in a footnote.
+        let moveResize = NSMenu(title: "Move & Resize")
+        func tile(_ title: String, _ key: String, _ selector: Selector) {
+            let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
+            item.keyEquivalentModifierMask = [.command, .control]
+            item.target = self
+            moveResize.addItem(item)
+        }
+        tile("Fill", "\r", #selector(tileFill))
+        tile("Centre", "c", #selector(tileCenter))
+        moveResize.addItem(NSMenuItem.separator())
+        tile("Left Half", String(UnicodeScalar(NSLeftArrowFunctionKey)!), #selector(tileLeftHalf))
+        tile("Right Half", String(UnicodeScalar(NSRightArrowFunctionKey)!), #selector(tileRightHalf))
+        tile("Top Half", String(UnicodeScalar(NSUpArrowFunctionKey)!), #selector(tileTopHalf))
+        tile("Bottom Half", String(UnicodeScalar(NSDownArrowFunctionKey)!), #selector(tileBottomHalf))
+        moveResize.addItem(NSMenuItem.separator())
+        tile("Return to Previous Size", "r", #selector(tileReturnToPrevious))
+        let moveResizeItem = NSMenuItem(title: "Move & Resize", action: nil, keyEquivalent: "")
+        moveResizeItem.submenu = moveResize
+        windowMenu.addItem(moveResizeItem)
+
         windowItem.submenu = windowMenu
         main.addItem(windowItem)
         NSApp.windowsMenu = windowMenu
@@ -736,6 +768,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     private func restoreZoom() {
         let saved = UserDefaults.standard.double(forKey: "MeridianPageZoom")
         if saved > 0.5 { webView.pageZoom = CGFloat(saved) }
+    }
+
+    // ---------------------------------------------------- window tiling
+    // Mirrors macOS's own Window Tiling actions (Fill, Centre, halves, Return
+    // to Previous Size) as real menu commands with their own ⌘⌃ shortcuts —
+    // see the comment where the Move & Resize menu is built.
+
+    private func tileTo(_ frame: NSRect) {
+        guard let window = window else { return }
+        if frameBeforeTile == nil { frameBeforeTile = window.frame }
+        window.setFrame(frame, display: true, animate: true)
+    }
+
+    @objc private func tileFill() {
+        guard let screen = window?.screen ?? NSScreen.main else { return }
+        tileTo(screen.visibleFrame)
+    }
+
+    @objc private func tileCenter() {
+        guard let window = window, let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        let size = window.frame.size
+        let origin = NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2)
+        tileTo(NSRect(origin: origin, size: size))
+    }
+
+    private func tileHalf(_ half: (NSRect) -> NSRect) {
+        guard let screen = window?.screen ?? NSScreen.main else { return }
+        tileTo(half(screen.visibleFrame))
+    }
+
+    @objc private func tileLeftHalf() {
+        tileHalf { visible in NSRect(x: visible.minX, y: visible.minY, width: visible.width / 2, height: visible.height) }
+    }
+    @objc private func tileRightHalf() {
+        tileHalf { visible in NSRect(x: visible.midX, y: visible.minY, width: visible.width / 2, height: visible.height) }
+    }
+    @objc private func tileTopHalf() {
+        tileHalf { visible in NSRect(x: visible.minX, y: visible.midY, width: visible.width, height: visible.height / 2) }
+    }
+    @objc private func tileBottomHalf() {
+        tileHalf { visible in NSRect(x: visible.minX, y: visible.minY, width: visible.width, height: visible.height / 2) }
+    }
+
+    @objc private func tileReturnToPrevious() {
+        guard let frame = frameBeforeTile else { return }
+        frameBeforeTile = nil
+        window?.setFrame(frame, display: true, animate: true)
     }
 
     @objc private func showDataFolder() {

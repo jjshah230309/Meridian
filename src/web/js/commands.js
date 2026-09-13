@@ -190,6 +190,29 @@ export function registerCommands() {
   ]);
 }
 
+// The window shapes below are the operating system's, not a Meridian
+// command — nothing here calls into the page to run them, which is exactly
+// why they cannot live in the registry above with the rest. Windows has one
+// row of these (Snap, built into every window); macOS has two, because its
+// system shortcuts use the Globe/fn key, which not every keyboard has —
+// Meridian's own Window menu offers the same six on ⌘⌃ as a fallback.
+const WINDOW_SHAPES_MAC = [
+  ['Fill the screen', 'fn ⌃F', '⌘⌃↩'],
+  ['Left half', 'fn ⌃←', '⌘⌃←'],
+  ['Right half', 'fn ⌃→', '⌘⌃→'],
+  ['Top half', 'fn ⌃↑', '⌘⌃↑'],
+  ['Bottom half', 'fn ⌃↓', '⌘⌃↓'],
+  ['Centre', 'fn ⌃C', '⌘⌃C'],
+  ['Undo the last tile', 'fn ⌃R', '⌘⌃R'],
+];
+const WINDOW_SHAPES_WIN = [
+  ['Maximise', '⊞ Win + ↑'],
+  ['Restore / minimise', '⊞ Win + ↓'],
+  ['Left half', '⊞ Win + ←'],
+  ['Right half', '⊞ Win + →'],
+  ['Move to the other monitor', '⊞ Win + ⇧ + ← / →'],
+];
+
 /** The printed card: every binding, grouped, generated from the registry. */
 export function showShortcutSheet() {
   const groups = new Map();
@@ -198,18 +221,29 @@ export function showShortcutSheet() {
     if (!groups.has(command.group)) groups.set(command.group, []);
     groups.get(command.group).push(command);
   }
+  const commandGroups = [...groups.entries()].map(([group, commands]) => h('div',
+    h('h3', { style: { marginBottom: 'var(--s2)' } }, group),
+    h('table.shortcut-table', h('tbody', ...commands.map((c) => h('tr',
+      h('td', c.title),
+      h('td', shortcuts.renderKeys(c.keys))))))));
+
+  const windowTable = shortcuts.isMac
+    ? h('table.shortcut-table',
+      h('thead', h('tr', h('th', ''), h('th', 'System (Globe key)'), h('th', "Meridian's Window menu"))),
+      h('tbody', ...WINDOW_SHAPES_MAC.map(([title, os, app]) => h('tr', h('td', title), h('td', os), h('td', app)))))
+    : h('table.shortcut-table', h('tbody', ...WINDOW_SHAPES_WIN.map(([title, keys]) => h('tr', h('td', title), h('td', keys)))));
+
   return modal({
     title: 'Keyboard shortcuts',
     size: 'wide',
     body: h('div',
       h('p.muted', { style: { marginTop: 0 } },
         `Two kinds. A chord is held together — ${shortcuts.MOD}K. A sequence is typed in order — G then D — and works anywhere you are not typing into a field.`),
-      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 'var(--s6)' } },
-        ...[...groups.entries()].map(([group, commands]) => h('div',
-          h('h3', { style: { marginBottom: 'var(--s2)' } }, group),
-          h('table.shortcut-table', h('tbody', ...commands.map((c) => h('tr',
-            h('td', c.title),
-            h('td', shortcuts.renderKeys(c.keys)))))))))),
+      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 'var(--s6)' } }, ...commandGroups),
+      h('h3', { style: { marginTop: 'var(--s6)', marginBottom: 'var(--s2)' } }, 'Window'),
+      h('p.muted', { style: { marginTop: 0 } },
+        "The operating system's own, not Meridian's — they work because the window is a normal, resizable one."),
+      windowTable),
     actions: [{ label: 'Close', value: null }],
   });
 }

@@ -40,6 +40,39 @@ in the middle. Arrow keys move, Enter runs, Escape closes.
 
 The palette is the answer to "I know Meridian does this, but where is it".
 
+### Resizing and tiling the window
+
+These are the operating system's own shortcuts, not Meridian's — they are not
+generated from the command list above, because Meridian is not what runs
+them. They work because the window is a normal, resizable one, and they are
+listed separately at the bottom of Help → Keyboard Shortcuts because they are
+just as worth knowing.
+
+**On macOS** (System Settings → Desktop & Dock → Windows), the Globe/fn key
+tiles the window without leaving it windowed:
+
+| Do this | Press |
+|---|---|
+| Fill the screen | fn ⌃F |
+| Left half / right half | fn ⌃← / fn ⌃→ |
+| Top half / bottom half | fn ⌃↑ / fn ⌃↓ |
+| Centre | fn ⌃C |
+| Undo the last tile | fn ⌃R |
+
+A keyboard with no Globe key cannot send those. Meridian's own **Window →
+Move & Resize** menu offers the same six on ⌘⌃ instead (⌘⌃↩ fills, ⌘⌃← /
+⌘⌃→ / ⌘⌃↑ / ⌘⌃↓ for the halves, ⌘⌃C to centre, ⌘⌃R to undo) — pick whichever
+your keyboard has.
+
+**On Windows**, the same shapes are Snap, built into every window:
+
+| Do this | Press |
+|---|---|
+| Maximise | ⊞ Win + ↑ |
+| Restore / minimise | ⊞ Win + ↓ |
+| Left half / right half | ⊞ Win + ← / ⊞ Win + → |
+| Move to the other monitor | ⊞ Win + ⇧ + ← / ⊞ Win + ⇧ + → |
+
 ## Lists
 
 A list shows one row per record. Every list works the same way.
