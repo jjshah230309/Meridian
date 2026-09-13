@@ -83,7 +83,7 @@ export function buildApi({ config }) {
     ctx.setSessionCookie(result.session.token);
     const access = rbac.loadAccess(ctx.db, t.id, result.user.id);
     return {
-      user: { id: result.user.id, name: result.user.name, email: result.user.email, is_owner: !!result.user.is_owner },
+      user: { id: result.user.id, name: result.user.name, email: result.user.email, is_owner: !!result.user.is_owner, prefs: safeJson(result.user.prefs, {}) },
       tenant: { id: t.id, name: t.name, slug: t.slug, base_currency: t.base_currency },
       csrf: auth.csrfFor(config.secret, result.session.id),
       permissions: access.permissions, roles: access.roles.map((x) => x.name),
@@ -100,11 +100,27 @@ export function buildApi({ config }) {
   r.get(`${P}/auth/session`, async (ctx) => {
     if (!ctx.user) throw new HttpError(401, 'Not signed in');
     return {
-      user: { id: ctx.user.id, name: ctx.user.name, email: ctx.user.email, is_owner: !!ctx.user.is_owner, employee_id: ctx.user.employee_id },
+      user: { id: ctx.user.id, name: ctx.user.name, email: ctx.user.email, is_owner: !!ctx.user.is_owner, employee_id: ctx.user.employee_id, prefs: safeJson(ctx.user.prefs, {}) },
       tenant: { id: ctx.tenant.id, name: ctx.tenant.name, slug: ctx.tenant.slug, base_currency: ctx.tenant.base_currency },
       csrf: ctx.csrf, permissions: ctx.access.permissions, roles: ctx.access.roles.map((x) => x.name),
       restrictions: Object.fromEntries(Object.entries(ctx.access.restrictions || {}).map(([k, v]) => [k, { own_only: v.ownOnly, count: v.allowed ? v.allowed.size : null }])),
     };
+  });
+
+  // The desktop app binds a fresh, random port every launch (so two open
+  // companies never fight over one port), which means the browser's own
+  // storage never survives to the next one -- it is scoped to an origin
+  // that changes every time. A few things genuinely need to survive a
+  // restart anyway (has this person seen the welcome tour?), so those live
+  // on the account instead, merged rather than replaced so one setting
+  // never clobbers another saved moments apart.
+  r.post(`${P}/auth/prefs`, async (ctx) => {
+    if (!ctx.user) throw new HttpError(401, 'Not signed in');
+    const patch = ctx.body || {};
+    const current = safeJson(ctx.user.prefs, {});
+    const next = { ...current, ...patch };
+    ctx.repo.update('app_user', ctx.user.id, { prefs: JSON.stringify(next), updated_at: nowIso() });
+    return { prefs: next };
   });
 
   r.post(`${P}/auth/password`, async (ctx) => {

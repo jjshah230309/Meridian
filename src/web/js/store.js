@@ -40,6 +40,13 @@ export async function loadSession() {
     roles: s.roles, restrictions: s.restrictions || {},
   });
   fmt.configure({ currency: s.tenant.base_currency });
+  // The desktop app binds a fresh, random port every launch, so localStorage
+  // -- scoped to that origin -- never carries anything to the next one. A
+  // few things saved through syncPref below are mirrored onto the account
+  // instead precisely so they survive that; pull them back into localStorage
+  // here, before anything on this screen has had a chance to ask getPref for
+  // one of them.
+  for (const [k, v] of Object.entries(s.user?.prefs || {})) setPref(k, v);
   return s;
 }
 
@@ -241,4 +248,17 @@ export function getPref(key, fallback) {
 }
 export function setPref(key, value) {
   try { localStorage.setItem(prefKey(key), JSON.stringify(value)); } catch { /* ignore */ }
+}
+
+/**
+ * Like setPref, but for the handful of settings that must survive the next
+ * launch -- the desktop app's random per-launch port means localStorage
+ * alone will not. Mirrors the value onto the account as well; loadSession
+ * pulls it back into localStorage on the next boot, whatever port that one
+ * happens to land on. Fire-and-forget: a save that loses the race with the
+ * window closing just means the offer runs once more, not data loss.
+ */
+export function syncPref(key, value) {
+  setPref(key, value);
+  API.savePrefs({ [key]: value }).catch(() => { /* best effort */ });
 }

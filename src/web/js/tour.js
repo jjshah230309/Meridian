@@ -617,12 +617,12 @@ export const completedTours = () => {
 export const isTourDone = (id) => completedTours().includes(id);
 function markDone(id) {
   const done = completedTours();
-  if (!done.includes(id)) store.setPref(DONE_KEY, [...done, id]);
+  if (!done.includes(id)) store.syncPref(DONE_KEY, [...done, id]);
   window.dispatchEvent(new CustomEvent('meridian:tour-progress', { detail: { id } }));
 }
 export const resetTourProgress = () => {
-  store.setPref(DONE_KEY, []);
-  store.setPref('tour.welcomed', false);
+  store.syncPref(DONE_KEY, []);
+  store.syncPref('tour.welcomed', false);
   window.dispatchEvent(new CustomEvent('meridian:tour-progress', { detail: { id: null } }));
 };
 /** The next tour worth offering: first available one not yet finished. */
@@ -909,7 +909,7 @@ function reposition() {
  */
 export function maybeOfferWelcome() {
   if (store.getPref('tour.welcomed', false)) return false;
-  store.setPref('tour.welcomed', true);
+  store.syncPref('tour.welcomed', true);
   setTimeout(() => showWelcome(), 620);
   return true;
 }

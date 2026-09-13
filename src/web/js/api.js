@@ -91,6 +91,7 @@ export const API = {
   setupState: () => request('GET', '/api/v1/setup/state', undefined, { allowUnauthorised: true }),
   provision: (body) => request('POST', '/api/v1/setup/provision', body, { allowUnauthorised: true }),
   changePassword: (current_password, new_password) => post('/api/v1/auth/password', { current_password, new_password }),
+  savePrefs: (patch) => post('/api/v1/auth/prefs', patch),
 
   meta: () => get('/api/v1/meta'),
   list: (type, params) => get(`/api/v1/records/${type}`, params),
