@@ -184,7 +184,17 @@ export const TYPEFACES = [
   { id: 'source', name: 'Source Sans', note: 'Humanist and warm; JetBrains Mono' },
   { id: 'inter', name: 'Inter', note: 'Neutral, tuned for screens' },
   { id: 'plex-serif', name: 'Plex Serif titles', note: 'Serif headings over a sans body' },
+  // Not a bundled font — Apple's licence for SF Pro forbids embedding the
+  // font files in any distributed software, on any platform. This asks the
+  // OS for the system font it already has installed instead, the same way
+  // every other typeface here already falls back to -apple-system if its
+  // own files are somehow missing. Elsewhere it quietly becomes the local
+  // system font (Segoe UI on Windows, and so on), which is why it defaults
+  // on for macOS and stays opt-in everywhere else.
+  { id: 'sf-pro', name: 'SF Pro', note: "macOS's own system font; no files bundled" },
 ];
+
+const isMacPlatform = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 const has = (list, id) => list.some((x) => x.id === id);
 
@@ -225,7 +235,7 @@ export function setTypeface(id) {
  */
 export function initAppearance() {
   setPalette(getPref('ui.palette', 'ink'));
-  setTypeface(getPref('ui.typeface', 'plex'));
+  setTypeface(getPref('ui.typeface', isMacPlatform() ? 'sf-pro' : 'plex'));
   initTheme();
   setDensity(getPref('ui.density', 'comfortable'));
   const zoom = Number(getPref('ui.zoom', 1)) || 1;

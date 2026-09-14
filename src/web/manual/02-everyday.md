@@ -163,20 +163,21 @@ deliberate: it stops the navigation competing with the numbers for your
 attention, and it is most of why the application reads as an instrument
 rather than a web page.
 
-**Typeface** — four pairings, all of which ship inside the application, so
-they work with no network and tell nobody outside this machine that you opened
-the books:
+**Typeface** — five pairings:
 
 | | |
 | --- | --- |
-| **IBM Plex** | Engineered and slightly technical, with Plex Mono for account codes and SKUs. The default. |
+| **IBM Plex** | Engineered and slightly technical, with Plex Mono for account codes and SKUs. The default outside macOS. |
 | **Source Sans** | Humanist and warmer, paired with JetBrains Mono. |
 | **Inter** | Neutral, drawn for screens, very steady at small sizes. |
-| **Plex Serif titles** | Serif page titles and headline figures over the same sans body. The most distinctive of the four. |
+| **Plex Serif titles** | Serif page titles and headline figures over the same sans body. The most distinctive of the five. |
+| **SF Pro** | macOS's own system font. The default there — not a font Meridian ships, but the copy already on the Mac, so it always matches whatever build of it the OS itself is running. On anything else it quietly becomes that platform's own interface font instead. |
 
-Each brings its own type scale. The same pixel size reads differently in
-different families, so picking a typeface adjusts the sizes with it rather
-than leaving three of the four slightly wrong.
+The first four ship inside the application, so they work with no network and
+tell nobody outside this machine that you opened the books. Each brings its
+own type scale — the same pixel size reads differently in different
+families, so picking a typeface adjusts the sizes with it rather than
+leaving the others slightly wrong.
 
 **Density** is worth trying: compact fits about a third more rows on a screen
 without hiding anything.

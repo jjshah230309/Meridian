@@ -19,7 +19,7 @@
 
      data-palette   ink | graphite | slate | midnight
      data-theme     light | dark
-     data-typeface  plex | source | inter | plex-serif
+     data-typeface  plex | source | inter | plex-serif | sf-pro
 
    A palette owns colour and nothing else; a typeface owns the family and
    the type scale and nothing else; the theme picks the light or dark cut of
@@ -113,6 +113,17 @@
   --display: 'IBM Plex Serif', Georgia, 'Times New Roman', serif;
   --track: 0;
   --t-xs: 11px; --t-sm: 12px; --t-md: 13px; --t-lg: 15px; --t-xl: 20px; --t-2xl: 25px;
+}
+/* The system font, not a bundled one -- see the note on TYPEFACES in
+   store.js. -apple-system/BlinkMacSystemFont resolve to San Francisco on
+   macOS without this app ever holding a copy of it; elsewhere they resolve
+   to whatever that platform calls its own interface font. */
+:root[data-typeface="sf-pro"] {
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  --display: var(--font);
+  --track: 0;
+  --t-xs: 11px; --t-sm: 12px; --t-md: 13px; --t-lg: 15px; --t-xl: 19px; --t-2xl: 24px;
 }
 
 /* =====================================================================
@@ -1515,6 +1526,7 @@ kbd, .kbd {
 .tf-plex-serif .specimen { font-family: 'IBM Plex Serif', Georgia, serif; }
 .tf-source { font-family: 'Source Sans 3', sans-serif; }
 .tf-inter { font-family: 'Inter', sans-serif; }
+.tf-sf-pro { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; }
 
 /* A choice made by picking one of a few shapes rather than reading a list. */
 .choice-row { display: flex; gap: var(--s2); flex-wrap: wrap; }

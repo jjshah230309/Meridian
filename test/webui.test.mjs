@@ -234,7 +234,7 @@ test('every family the typefaces offer is actually bundled', () => {
   const declared = new Set([...fontCss.matchAll(/font-family:\s*'([^']+)'/g)].map((m) => m[1]));
   const block = css.slice(css.indexOf('   Typefaces'), css.indexOf('   Palettes — light'));
   const asked = new Set([...block.matchAll(/'([A-Z][^']+)'/g)].map((m) => m[1]));
-  const missing = [...asked].filter((f) => !declared.has(f) && !/^(Segoe UI|Georgia|Times New Roman)$/.test(f));
+  const missing = [...asked].filter((f) => !declared.has(f) && !/^(Segoe UI|Georgia|Times New Roman|SF Pro Text|SF Pro Display|SF Mono)$/.test(f));
   assert.deepEqual(missing, [], 'a typeface option names a family with no bundled files');
 });
 
