@@ -1152,9 +1152,28 @@ export function buildApi({ config }) {
     });
   });
 
-  r.get(`${P}/setup/integration-events`, async (ctx) => ({
-    rows: ctx.repo.query('SELECT * FROM integration_event WHERE tenant_id = :t ORDER BY created_at DESC LIMIT 100'),
-  }));
+  r.get(`${P}/setup/integration-events`, async (ctx) => {
+    rbac.require$(ctx.access, 'setup', LEVEL.VIEW);
+    return { rows: ctx.repo.query('SELECT * FROM integration_event WHERE tenant_id = :t ORDER BY created_at DESC LIMIT 100') };
+  });
+
+  // A failed delivery (a webhook endpoint that was down, a bad SMTP
+  // password since corrected) is otherwise stuck: outbox.drainOnce never
+  // looks at anything past 'pending'. Resetting it re-queues it for the
+  // next drain cycle rather than requiring the whole event be recreated.
+  r.post(`${P}/setup/integration-events/:id/retry`, async (ctx) => {
+    rbac.require$(ctx.access, 'setup', LEVEL.EDIT);
+    return ctx.tx(() => {
+      const row = ctx.repo.get('integration_event', ctx.params.id);
+      if (!row) throw notFound('Event not found');
+      if (row.status !== 'failed') throw unprocessable(`Only a failed event can be retried (this one is ${row.status}).`);
+      ctx.repo.exec(
+        `UPDATE integration_event SET status = 'pending', next_attempt_at = NULL WHERE tenant_id = :t AND id = ?`,
+        [ctx.params.id]);
+      audit.record(ctx.repo, { recordType: 'integration_event', recordId: ctx.params.id, action: 'retry' });
+      return { ok: true };
+    });
+  });
 
   // Assets, budgeting, consolidation, projects, manufacturing, warehousing,
   // planning, service, commerce and workforce live in their own file.

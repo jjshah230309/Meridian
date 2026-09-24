@@ -183,6 +183,7 @@ export const API = {
   setUserRoles: (id, role_ids) => put(`/api/v1/setup/users/${id}/roles`, { role_ids }),
   company: () => get('/api/v1/setup/company'),
   integrationEvents: () => get('/api/v1/setup/integration-events'),
+  retryIntegrationEvent: (id) => post(`/api/v1/setup/integration-events/${id}/retry`, {}),
   // ---- projects, production, warehouse and field service
   projectPortfolio: (status) => get('/api/v1/projects/portfolio', status ? { status } : undefined),
   projectUtilisation: (params) => get('/api/v1/projects/utilisation', params),

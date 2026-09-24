@@ -484,12 +484,17 @@ async function currenciesTab() {
 }
 
 // --------------------------------------------------------- integrations
-async function integrationsTab() {
+async function integrationsTab(go) {
   const { rows } = await API.integrationEvents();
+
+  const retry = async (id) => {
+    try { await API.retryIntegrationEvent(id); toast('Queued for the next delivery attempt', { kind: 'success' }); go('/setup/integrations'); }
+    catch (err) { notifyError(err); }
+  };
 
   const table = rows.length
     ? h('div.grid-wrap', h('table.grid',
-      h('thead', h('tr', h('th', 'Created'), h('th', 'Channel'), h('th', 'Event'), h('th', 'Record'), h('th', 'Status'), h('th.num', 'Attempts'), h('th', 'Target'))),
+      h('thead', h('tr', h('th', 'Created'), h('th', 'Channel'), h('th', 'Event'), h('th', 'Record'), h('th', 'Status'), h('th.num', 'Attempts'), h('th', 'Target'), h('th', 'Delivered'), h('th', 'Last error'), h('th'))),
       h('tbody', ...rows.map((e) => h('tr',
         h('td.nowrap', fmt.dateTime(e.created_at)),
         h('td', h('span.tag', fmt.titleCase(e.channel))),
@@ -497,16 +502,21 @@ async function integrationsTab() {
         h('td.muted', fmt.titleCase(e.record_type || '—')),
         h('td', statusTag(e.status)),
         h('td.num.muted', String(e.attempts)),
-        h('td.faint', { style: { fontSize: '11.5px' } }, e.target_url || '—')))))) 
-    : empty('Nothing queued', 'Payroll exports and workflow webhooks appear here before they are delivered.');
+        h('td.faint', { style: { fontSize: '11.5px' } }, e.target_url || '—'),
+        h('td.nowrap.muted', e.delivered_at ? fmt.dateTime(e.delivered_at) : '—'),
+        h('td.faint', { style: { fontSize: '11.5px', maxWidth: '240px' } }, e.last_error || '—'),
+        h('td', e.status === 'failed'
+          ? h('button.btn.sm', { onclick: () => retry(e.id) }, 'Retry')
+          : null))))))
+    : empty('Nothing queued', 'Payroll exports, workflow webhooks and outgoing email appear here before they are delivered.');
 
   const explainer = h('div.card', { style: { marginBottom: '14px' } },
     h('div.card-body',
       h('h3', { style: { marginBottom: '6px' } }, 'Outbound integration queue'),
       h('div.muted', { style: { fontSize: '12.5px', lineHeight: 1.6, maxWidth: '760px' } },
         'Meridian never calls a third party from inside a ledger transaction — a slow or unreachable provider must not be able to hold a posting open or roll one back. ',
-        'Payroll submissions and workflow webhooks are written to this outbox in the same transaction as the business record, then delivered separately. ',
-        'That makes retries idempotent and gives you an audit trail of what was sent and when.'),
+        'Payroll submissions, workflow webhooks and outgoing email are written to this outbox in the same transaction as the business record, then delivered separately, roughly every 30 seconds. ',
+        'That makes retries idempotent and gives you an audit trail of what was sent and when. A failed delivery retries itself with a growing delay up to 8 attempts, then stops and can be retried by hand.'),
       h('div.tag.blue', { style: { marginTop: '10px' } }, `Server scripts: ${store.state.meta.scripts_enabled ? 'enabled' : 'disabled (recommended)'}`)));
 
   return h('div', explainer, h('div.card', h('div.card-head', h('h2', 'Delivery log')), table));

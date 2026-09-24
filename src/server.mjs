@@ -16,6 +16,7 @@ import { openDatabase, migrate, Repo, transaction } from './core/db.mjs';
 import * as httpx from './core/http.mjs';
 import * as auth from './core/auth.mjs';
 import * as rbac from './core/rbac.mjs';
+import * as outbox from './core/outbox.mjs';
 import { nowIso } from './core/util.mjs';
 import { buildApi } from './api.mjs';
 import * as appconfig from './core/appconfig.mjs';
@@ -405,6 +406,16 @@ async function main() {
     } catch (e) { console.error('housekeeping:', e.message); }
   }, 3600_000);
   housekeeping.unref();
+
+  // Drain the outbox: a webhook a workflow queued, or an email a statement
+  // or dunning notice queued (core/smtp.mjs, once configured). Every 30s
+  // rather than hourly, since a webhook waiting on this is closer to "the
+  // record just changed" than "once a day is fine".
+  const draining = setInterval(() => {
+    outbox.drainOnce(db, { secret: config.secret, sendMail: config.sendMail || null })
+      .catch((e) => logger.error('outbox drain:', e));
+  }, 30_000);
+  draining.unref();
 
   let shuttingDown = false;
   const shutdown = (signal) => {
