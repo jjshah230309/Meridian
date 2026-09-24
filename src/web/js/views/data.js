@@ -732,6 +732,7 @@ async function connectTab() {
   const tokenRows = tokens.map((t) => h('tr',
     h('td', h('strong', t.name)),
     h('td.muted', { style: { fontFamily: 'var(--mono)' } }, `${t.prefix}…`),
+    h('td', Array.isArray(t.scopes) && t.scopes.includes('*') ? h('span.tag', 'Full access') : h('span.tag.blue', 'Read-only')),
     h('td.muted', t.user_name),
     h('td.muted', fmt.dateShort(t.created_at)),
     h('td.muted', t.last_used_at ? fmt.relative(t.last_used_at) : 'never used'),
@@ -751,19 +752,24 @@ async function connectTab() {
   const newToken = h('button.btn.primary', {
     onclick: () => {
       const nameInput = h('input', { type: 'text', placeholder: 'Power BI — finance dashboard', style: { width: '100%' } });
+      // Checked by default: a BI/reporting tool -- what this dialog's own
+      // copy already describes the use case as -- only ever needs to read.
+      const readOnly = h('input', { type: 'checkbox', checked: true, id: 'tok-readonly' });
       const dlg = modal({
         title: 'New API token',
         body: h('div',
           h('p.muted', { style: { marginTop: 0 } },
             'The token can see exactly what you can see, and nothing more. It is shown once.'),
-          h('div.field', h('label', 'What is it for?'), nameInput)),
+          h('div.field', h('label', 'What is it for?'), nameInput),
+          h('div.field.checkbox', readOnly, h('label', { for: 'tok-readonly' }, 'Read-only'),
+            h('div.help', 'Unchecked, the token can create, edit and delete records too, not only view them.'))),
         actions: [
           h('button.btn', { onclick: () => dlg.close(null) }, 'Cancel'),
           h('button.btn.primary', {
             onclick: async () => {
               if (!nameInput.value.trim()) { toast('Give the token a name', { kind: 'error' }); return; }
               try {
-                const made = await API.createApiToken(nameInput.value.trim());
+                const made = await API.createApiToken(nameInput.value.trim(), { readOnly: readOnly.checked });
                 dlg.close(null);
                 showToken(made);
               } catch (e) { notifyError(e); }
@@ -827,7 +833,7 @@ async function connectTab() {
       h('div.card-head', h('h2', 'API tokens'), newToken),
       tokens.length
         ? h('div.grid-wrap', h('table.grid',
-          h('thead', h('tr', h('th', 'Name'), h('th', 'Token'), h('th', 'Created by'),
+          h('thead', h('tr', h('th', 'Name'), h('th', 'Token'), h('th', 'Scope'), h('th', 'Created by'),
             h('th', 'Created'), h('th', 'Last used'), h('th', 'Status'), h('th', ''))),
           h('tbody', ...tokenRows)))
         : h('div', { style: { padding: '12px' } },

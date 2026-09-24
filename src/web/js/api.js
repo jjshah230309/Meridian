@@ -373,7 +373,8 @@ export const API = {
   connectionSettings: () => get('/api/v1/settings/connection'),
   saveConnectionSettings: (body) => put('/api/v1/settings/connection', body),
   apiTokens: () => get('/api/v1/setup/api-tokens'),
-  createApiToken: (name, expires_at = null) => post('/api/v1/setup/api-tokens', { name, expires_at }),
+  createApiToken: (name, { expires_at = null, readOnly = true } = {}) =>
+    post('/api/v1/setup/api-tokens', { name, expires_at, scopes: readOnly ? ['read'] : ['*'] }),
   revokeApiToken: (id) => del(`/api/v1/setup/api-tokens/${id}`),
 
   exportCsv: (type, definition) => API.exportFile(type, 'csv', definition),

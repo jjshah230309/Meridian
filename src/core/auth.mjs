@@ -170,5 +170,13 @@ export function readApiToken(db, raw) {
   if (!row || row.revoked_at) return null;
   if (row.expires_at && Date.parse(row.expires_at) < Date.now()) return null;
   db.prepare('UPDATE api_token SET last_used_at = ? WHERE tenant_id = ? AND id = ?').run(nowIso(), row.tenant_id, row.id);
-  return row;
+  // Read via db.prepare rather than Repo, so scopes -- a JSON column --
+  // comes back as the raw stored string unless parsed here explicitly. A
+  // value that fails to parse (corruption, not anything issueApiToken
+  // itself would ever write) fails safe to the most restrictive scope,
+  // not the most permissive.
+  let scopes;
+  try { scopes = JSON.parse(row.scopes); if (!Array.isArray(scopes) || !scopes.length) scopes = ['read']; }
+  catch { scopes = ['read']; }
+  return { ...row, scopes };
 }

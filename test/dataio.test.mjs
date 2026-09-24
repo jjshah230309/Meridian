@@ -78,8 +78,8 @@ function client() {
       const buf = Buffer.from(await res.arrayBuffer());
       return { status: res.status, buf, text: buf.toString('utf8'), headers: res.headers };
     },
-    async login() {
-      const r = await this.call('POST', '/api/v1/auth/login', { email: 'owner@test.local', password: PASSWORD });
+    async login(email = 'owner@test.local', password = PASSWORD) {
+      const r = await this.call('POST', '/api/v1/auth/login', { email, password });
       if (r.body?.csrf) csrf = r.body.csrf;
       return r;
     },
@@ -783,6 +783,69 @@ test('OData refuses an unauthenticated read and accepts a Basic-auth API token',
     headers: { Authorization: 'Basic ' + Buffer.from('owner@test.local:not-a-token').toString('base64') },
   });
   assert.equal(wrong.status, 401, 'a bad token must not fall through to a session');
+});
+
+test('a read-only API token can read but not write, and does not inherit owner bypass', async () => {
+  const c = client();
+  await c.login();
+  const made = await c.call('POST', '/api/v1/setup/api-tokens', { name: 'Read-only test', scopes: ['read'] });
+  assert.equal(made.status, 200, made.text);
+  const token = made.body.token;
+
+  const tk = client();
+  const withToken = (method, path, body) => tk.call(method, path, body, { Authorization: `Bearer ${token}` });
+
+  const read = await withToken('GET', '/api/v1/records/customer');
+  assert.equal(read.status, 200, 'a read-only token can still list records');
+
+  const write = await withToken('POST', '/api/v1/records/customer', { name: 'Should not be created', terms: 'NET30' });
+  assert.equal(write.status, 403, 'a read-only token must not be able to create a record, even though the owner who issued it could');
+
+  // The owner who issued it can rebuild ledger balances (owner-only); the
+  // token issued from their own account must not inherit that.
+  const rebuild = await withToken('POST', '/api/v1/gl/rebuild-balances', {});
+  assert.equal(rebuild.status, 403, 'owner-only routes must not open up just because the token belongs to an owner');
+});
+
+test('an unrecognised scope value is not accepted as full access', async () => {
+  const c = client();
+  await c.login();
+  const made = await c.call('POST', '/api/v1/setup/api-tokens', { name: 'Weird scope test', scopes: ['something-made-up'] });
+  assert.equal(made.status, 200);
+  const token = made.body.token;
+
+  const tk = client();
+  const write = await tk.call('POST', '/api/v1/records/customer', { name: 'x', terms: 'NET30' }, { Authorization: `Bearer ${token}` });
+  assert.equal(write.status, 403, 'an unrecognised scope must fall back to read-only, not full access');
+
+  const list = (await c.call('GET', '/api/v1/setup/api-tokens')).body.tokens;
+  const row = list.find((t) => t.name === 'Weird scope test');
+  assert.deepEqual(row.scopes, ['read'], 'the stored scope should be the sanitised value, not the raw input');
+});
+
+test('previously-open GL, report and reconciliation routes now require the matching permission', async () => {
+  const c = client();
+  await c.login();
+  const roles = (await c.call('GET', '/api/v1/setup/roles')).body.roles;
+  const warehouse = roles.find((r) => r.name === 'Warehouse');
+  await c.call('PUT', `/api/v1/setup/roles/${warehouse.id}/permissions`, { permissions: {} }); // no permissions at all
+  await c.call('POST', '/api/v1/setup/users', { name: 'No Perms', email: 'noperms@test.local', password: 'Correct-Horse-9', role_ids: [warehouse.id] });
+
+  const w = client();
+  await w.login('noperms@test.local', 'Correct-Horse-9');
+  for (const path of [
+    '/api/v1/gl/periods', '/api/v1/gl/rates',
+    '/api/v1/reports/dashboard', '/api/v1/reports/ar-aging', '/api/v1/reports/ap-aging',
+    '/api/v1/reports/revenue-trend', '/api/v1/reports/top-customers', '/api/v1/reports/top-items',
+    '/api/v1/reports/drilldown/revenue', '/api/v1/setup/integration-events',
+    '/api/v1/bank/reconciliations/not-a-real-id',
+  ]) {
+    const res = await w.call('GET', path);
+    assert.equal(res.status, 403, `${path} must refuse a role with no permissions at all`);
+  }
+  // Still reachable for the owner.
+  assert.equal((await c.call('GET', '/api/v1/gl/periods')).status, 200);
+  assert.equal((await c.call('GET', '/api/v1/reports/dashboard')).status, 200);
 });
 
 // --- XML and SOAP ----------------------------------------------------------

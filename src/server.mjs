@@ -229,6 +229,20 @@ export function createServer(config, db) {
         if (tenant && tenant.status === 'active') {
           access = rbac.loadAccess(db, tenant.id, identity.user_id);
           if (access) {
+            // A token that isn't full access ('*') is capped here, once,
+            // rather than at each of the ~300 rbac.require$/can/levelFor/
+            // rowFilter/canSeeRow call sites across api*.mjs/odata.mjs/
+            // soap.mjs -- every one of them reads access.permissions and
+            // access.isOwner, so every one of them respects the cap
+            // automatically. 'read' is the only scope this issues today
+            // (see /setup/api-tokens), but any scope this build doesn't
+            // recognise caps to read too, rather than granting '*'.
+            if (tokenRow && !tokenRow.scopes.includes('*')) {
+              access.isOwner = false;
+              for (const k of Object.keys(access.permissions)) {
+                access.permissions[k] = Math.min(access.permissions[k], rbac.LEVEL.VIEW);
+              }
+            }
             user = access.user;
             repo = new Repo(db, tenant.id, { user, access, ip, requestId });
             if (session) csrf = auth.csrfFor(config.secret, session.id);

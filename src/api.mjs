@@ -581,7 +581,10 @@ export function buildApi({ config }) {
     });
   });
 
-  r.get(`${P}/gl/periods`, async (ctx) => ctx.repo.find('accounting_period', { order: 'start_date DESC' }));
+  r.get(`${P}/gl/periods`, async (ctx) => {
+    rbac.require$(ctx.access, 'accounting_period', LEVEL.VIEW);
+    return ctx.repo.find('accounting_period', { order: 'start_date DESC' });
+  });
 
   r.post(`${P}/gl/periods/generate`, async (ctx) => {
     rbac.require$(ctx.access, 'accounting_period', LEVEL.FULL);
@@ -616,7 +619,10 @@ export function buildApi({ config }) {
     });
   });
 
-  r.get(`${P}/gl/rates`, async (ctx) => ctx.repo.query('SELECT * FROM exchange_rate WHERE tenant_id = :t ORDER BY rate_date DESC LIMIT 200'));
+  r.get(`${P}/gl/rates`, async (ctx) => {
+    rbac.require$(ctx.access, 'exchange_rate', LEVEL.VIEW);
+    return ctx.repo.query('SELECT * FROM exchange_rate WHERE tenant_id = :t ORDER BY rate_date DESC LIMIT 200');
+  });
 
   // -------------------------------------------------------- transactions
   r.get(`${P}/txn`, async (ctx) => {
@@ -880,18 +886,18 @@ export function buildApi({ config }) {
   // -------------------------------------------------------------- reports
   const reportGuard = (ctx) => rbac.require$(ctx.access, 'account', LEVEL.VIEW);
 
-  r.get(`${P}/reports/dashboard`, async (ctx) => reports.dashboard(ctx.repo, { subsidiaryId: ctx.query.subsidiary_id || null }));
+  r.get(`${P}/reports/dashboard`, async (ctx) => { reportGuard(ctx); return reports.dashboard(ctx.repo, { subsidiaryId: ctx.query.subsidiary_id || null }); });
   r.get(`${P}/reports/trial-balance`, async (ctx) => { reportGuard(ctx); return reports.trialBalance(ctx.repo, { from: ctx.query.from, to: ctx.query.to, subsidiaryId: ctx.query.subsidiary_id || null, bookId: ctx.query.book_id || null }); });
   r.get(`${P}/reports/income-statement`, async (ctx) => { reportGuard(ctx); return reports.incomeStatement(ctx.repo, { from: ctx.query.from, to: ctx.query.to, subsidiaryId: ctx.query.subsidiary_id || null, compareFrom: ctx.query.compare_from, compareTo: ctx.query.compare_to, bookId: ctx.query.book_id || null }); });
   r.get(`${P}/reports/balance-sheet`, async (ctx) => { reportGuard(ctx); return reports.balanceSheet(ctx.repo, { asOf: ctx.query.as_of, subsidiaryId: ctx.query.subsidiary_id || null, bookId: ctx.query.book_id || null }); });
   r.get(`${P}/reports/cash-flow`, async (ctx) => { reportGuard(ctx); return reports.cashFlow(ctx.repo, { from: ctx.query.from, to: ctx.query.to, subsidiaryId: ctx.query.subsidiary_id || null }); });
-  r.get(`${P}/reports/ar-aging`, async (ctx) => reports.arAging(ctx.repo, { asOf: ctx.query.as_of, subsidiaryId: ctx.query.subsidiary_id || null }));
-  r.get(`${P}/reports/ap-aging`, async (ctx) => reports.apAging(ctx.repo, { asOf: ctx.query.as_of, subsidiaryId: ctx.query.subsidiary_id || null }));
-  r.get(`${P}/reports/revenue-trend`, async (ctx) => ({ months: reports.revenueByMonth(ctx.repo, { months: int(ctx.query.months, 12) }) }));
-  r.get(`${P}/reports/top-customers`, async (ctx) => ({ rows: reports.topCustomers(ctx.repo, { limit: int(ctx.query.limit, 10), days: int(ctx.query.days, 365) }) }));
-  r.get(`${P}/reports/top-items`, async (ctx) => ({ rows: reports.topItems(ctx.repo, { limit: int(ctx.query.limit, 10), days: int(ctx.query.days, 365) }) }));
+  r.get(`${P}/reports/ar-aging`, async (ctx) => { reportGuard(ctx); return reports.arAging(ctx.repo, { asOf: ctx.query.as_of, subsidiaryId: ctx.query.subsidiary_id || null }); });
+  r.get(`${P}/reports/ap-aging`, async (ctx) => { reportGuard(ctx); return reports.apAging(ctx.repo, { asOf: ctx.query.as_of, subsidiaryId: ctx.query.subsidiary_id || null }); });
+  r.get(`${P}/reports/revenue-trend`, async (ctx) => { reportGuard(ctx); return { months: reports.revenueByMonth(ctx.repo, { months: int(ctx.query.months, 12) }) }; });
+  r.get(`${P}/reports/top-customers`, async (ctx) => { reportGuard(ctx); return { rows: reports.topCustomers(ctx.repo, { limit: int(ctx.query.limit, 10), days: int(ctx.query.days, 365) }) }; });
+  r.get(`${P}/reports/top-items`, async (ctx) => { reportGuard(ctx); return { rows: reports.topItems(ctx.repo, { limit: int(ctx.query.limit, 10), days: int(ctx.query.days, 365) }) }; });
   r.get(`${P}/reports/integrity`, async (ctx) => { reportGuard(ctx); return gl.integrityCheck(ctx.repo); });
-  r.get(`${P}/reports/drilldown/:metric`, async (ctx) => ({ rows: reports.drillDown(ctx.repo, ctx.params.metric, {}) }));
+  r.get(`${P}/reports/drilldown/:metric`, async (ctx) => { reportGuard(ctx); return { rows: reports.drillDown(ctx.repo, ctx.params.metric, {}) }; });
 
   // ----------------------------------------------------------------- bank
   r.get(`${P}/bank/accounts`, async (ctx) => { rbac.require$(ctx.access, 'bank_account', LEVEL.VIEW); return { accounts: bank.listBankAccounts(ctx.repo), position: bank.cashPosition(ctx.repo) }; });
@@ -922,7 +928,10 @@ export function buildApi({ config }) {
     return ctx.tx(() => bank.unmatch(ctx.repo, ctx.body.bank_txn_id));
   });
   r.post(`${P}/bank/reconciliations`, async (ctx) => { rbac.require$(ctx.access, 'reconciliation', LEVEL.CREATE); return ctx.tx(() => bank.startReconciliation(ctx.repo, ctx.body || {})); });
-  r.get(`${P}/bank/reconciliations/:id`, async (ctx) => bank.reconciliationState(ctx.repo, ctx.params.id));
+  r.get(`${P}/bank/reconciliations/:id`, async (ctx) => {
+    rbac.require$(ctx.access, 'reconciliation', LEVEL.VIEW);
+    return bank.reconciliationState(ctx.repo, ctx.params.id);
+  });
   r.post(`${P}/bank/reconciliations/:id/select`, async (ctx) => {
     rbac.require$(ctx.access, 'reconciliation', LEVEL.EDIT);
     return ctx.tx(() => bank.setReconciled(ctx.repo, ctx.params.id, rowList(ctx.body?.ids, 'ids')));
@@ -1165,16 +1174,25 @@ export function buildApi({ config }) {
 
   r.post(`${P}/setup/api-tokens`, async (ctx) => {
     rbac.require$(ctx.access, 'app_user', LEVEL.CREATE);
-    const { name, expires_at = null, scopes = ['*'] } = ctx.body || {};
+    const { name, expires_at = null, scopes: rawScopes = ['*'] } = ctx.body || {};
     if (!name || !String(name).trim()) throw new ValidationError({ name: 'Give the token a name so you can recognise it later' });
     if (expires_at && !/^\d{4}-\d{2}-\d{2}$/.test(expires_at)) throw new ValidationError({ expires_at: 'Use YYYY-MM-DD' });
+    // Previously any JSON array was accepted and stored verbatim, with
+    // nothing anywhere reading it back -- a caller believing they had
+    // issued a restricted token had actually issued a full-access one.
+    // '*' and 'read' are the only real scopes server.mjs's request
+    // pipeline enforces; anything else in the array is simply not a
+    // scope this build knows, so it is dropped rather than stored and
+    // silently ignored later.
+    const scopes = Array.isArray(rawScopes) && rawScopes.includes('*') ? ['*']
+      : Array.isArray(rawScopes) && rawScopes.includes('read') ? ['read']
+        : ['read'];
     return ctx.tx(() => {
       // A token inherits the permissions of the user who created it, so it can
       // never read more than that person can.
       const issued = auth.issueApiToken(ctx.repo.db, {
         tenantId: ctx.tenant.id, userId: ctx.user.id, name: String(name).trim(),
-        scopes: Array.isArray(scopes) && scopes.length ? scopes : ['*'],
-        expiresAt: expires_at ? `${expires_at}T23:59:59.999Z` : null,
+        scopes, expiresAt: expires_at ? `${expires_at}T23:59:59.999Z` : null,
       });
       audit.record(ctx.repo, {
         recordType: 'api_token', recordId: issued.id, action: 'create',

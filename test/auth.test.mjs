@@ -94,3 +94,29 @@ test('decryptSecret of an empty or malformed value does not throw a confusing er
   assert.equal(auth.decryptSecret(secret, null), '');
   assert.throws(() => auth.decryptSecret(secret, 'not-the-right-shape'));
 });
+
+// -------------------------------------------------------------- api tokens
+test('readApiToken parses scopes into a real array, not the raw JSON string', () => {
+  const f = freshTenant();
+  const issued = auth.issueApiToken(f.db, { tenantId: f.tenant.id, userId: f.ownerId, name: 'x', scopes: ['read'] });
+  const row = auth.readApiToken(f.db, issued.token);
+  assert.ok(Array.isArray(row.scopes), 'scopes must come back as an array, not a JSON string');
+  assert.deepEqual(row.scopes, ['read']);
+});
+
+test('readApiToken falls back to the most restrictive scope for a corrupted scopes column, not the most permissive', () => {
+  const f = freshTenant();
+  const issued = auth.issueApiToken(f.db, { tenantId: f.tenant.id, userId: f.ownerId, name: 'x', scopes: ['*'] });
+  // Corrupt the stored value directly -- something issueApiToken itself
+  // would never write, but a bug or a hand-edited row could.
+  f.db.prepare('UPDATE api_token SET scopes = ? WHERE tenant_id = ? AND id = ?').run('not valid json', f.tenant.id, issued.id);
+  const row = auth.readApiToken(f.db, issued.token);
+  assert.deepEqual(row.scopes, ['read'], 'a corrupted scopes value must fail safe to read-only, not silently grant full access');
+});
+
+test('a default token (no scopes named) is still full access, unchanged from before scopes were enforced', () => {
+  const f = freshTenant();
+  const issued = auth.issueApiToken(f.db, { tenantId: f.tenant.id, userId: f.ownerId, name: 'x' });
+  const row = auth.readApiToken(f.db, issued.token);
+  assert.deepEqual(row.scopes, ['*']);
+});
