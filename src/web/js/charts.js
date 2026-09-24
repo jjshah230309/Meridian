@@ -88,7 +88,7 @@ export function lineChart(data, { height = 168, format = (v) => fmt.moneyCompact
 /** Horizontal stacked bar — used for aging buckets and mix breakdowns. */
 export function stackedBar(segments, { height = 22, format = (v) => fmt.money(v) } = {}) {
   const total = segments.reduce((a, s) => a + Math.max(0, s.value), 0) || 1;
-  const colours = ['var(--pos)', 'var(--accent)', 'var(--warn)', '#c2762b', 'var(--neg)'];
+  const colours = ['var(--pos)', 'var(--accent)', 'var(--warn)', 'var(--chart-brown)', 'var(--neg)'];
   let x = 0;
   const W = 640;
   const kids = segments.map((s, i) => {
@@ -103,10 +103,10 @@ export function stackedBar(segments, { height = 22, format = (v) => fmt.money(v)
 
 /** Legend row for a stacked bar. */
 export const legend = (segments, format = (v) => fmt.money(v)) => {
-  const colours = ['var(--pos)', 'var(--accent)', 'var(--warn)', '#c2762b', 'var(--neg)'];
-  return h('div.row.wrap', { style: { gap: '12px', marginTop: '8px', fontSize: '11.5px' } },
-    ...segments.map((s, i) => h('span.row', { style: { gap: '5px' } },
-      h('span', { style: { width: '9px', height: '9px', borderRadius: '2px', background: s.colour || colours[i % colours.length], display: 'inline-block' } }),
+  const colours = ['var(--pos)', 'var(--accent)', 'var(--warn)', 'var(--chart-brown)', 'var(--neg)'];
+  return h('div.row-tight.wrap', { style: { gap: 'var(--s3)', marginTop: 'var(--s2)', fontSize: 'var(--t-sm)' } },
+    ...segments.map((s, i) => h('span.row', { style: { gap: 'var(--s2)' } },
+      h('span', { style: { width: 'var(--s2)', height: 'var(--s2)', borderRadius: 'var(--radius-sm)', background: s.colour || colours[i % colours.length], display: 'inline-block' } }),
       h('span.muted', s.label),
       h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, format(s.value)))));
 };
@@ -116,7 +116,7 @@ export function donut(data, { size = 150, thickness = 22, centre = null } = {}) 
   const total = data.reduce((a, d) => a + Math.max(0, d.value), 0);
   const r = (size - thickness) / 2;
   const c = size / 2;
-  const colours = ['var(--accent)', 'var(--pos)', 'var(--warn)', '#8a6fb0', 'var(--neg)', '#4c8fa8'];
+  const colours = ['var(--accent)', 'var(--pos)', 'var(--warn)', 'var(--chart-purple)', 'var(--neg)', 'var(--chart-blue)'];
   const kids = [];
   if (total <= 0) {
     kids.push(svgEl('circle', { cx: c, cy: c, r, fill: 'none', stroke: 'var(--surface-3)', 'stroke-width': thickness }));
@@ -135,8 +135,8 @@ export function donut(data, { size = 150, thickness = 22, centre = null } = {}) 
     });
   }
   if (centre) {
-    kids.push(svgEl('text', { x: c, y: c - 2, 'text-anchor': 'middle', style: 'font-size:15px;font-weight:650;fill:var(--text)' }, centre.value));
-    kids.push(svgEl('text', { x: c, y: c + 13, 'text-anchor': 'middle', style: 'font-size:10px;fill:var(--text-muted)' }, centre.label));
+    kids.push(svgEl('text', { x: c, y: c - 2, 'text-anchor': 'middle', style: 'font-size:var(--t-lg);font-weight:650;fill:var(--text)' }, centre.value));
+    kids.push(svgEl('text', { x: c, y: c + 13, 'text-anchor': 'middle', style: 'font-size:var(--t-xs);fill:var(--text-muted)' }, centre.label));
   }
   return svgEl('svg', { class: 'chart', viewBox: `0 0 ${size} ${size}`, width: size, height: size, role: 'img' }, kids);
 }

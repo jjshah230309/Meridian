@@ -338,6 +338,32 @@ test('the palette and typeface lists agree with the stylesheet', async () => {
   }
 });
 
+test('every look the settings screen offers is either the base look or has its own stylesheet section', async () => {
+  // Dock is the file's unscoped default -- every rule above the "Look:
+  // Glass" section already is Dock -- so only a non-default look needs its
+  // own `[data-look="…"]` section to actually change anything.
+  const { LOOKS } = await import('../src/web/js/store.js');
+  const css = CSS();
+  for (const l of LOOKS) {
+    if (l.id === 'dock') continue;
+    assert.ok(css.includes(`[data-look="${l.id}"]`), `Settings offers look "${l.id}" but the stylesheet has no section for it`);
+  }
+});
+
+test('index.html\'s default appearance attributes match store.js\'s defaults', async () => {
+  // The attributes on <html> are read before the first script runs, so the
+  // page never flashes one appearance and settles on another. If they drift
+  // from store.js's own fallbacks, that flash comes back.
+  const { state } = await import('../src/web/js/store.js');
+  const html = read(WEB, 'index.html');
+  const tag = html.match(/<html[^>]*>/)?.[0] || '';
+  for (const attr of ['theme', 'palette', 'typeface', 'look']) {
+    const m = tag.match(new RegExp(`data-${attr}="([^"]+)"`));
+    assert.ok(m, `index.html's <html> has no data-${attr}`);
+    assert.equal(m[1], state[attr], `index.html's data-${attr} does not match store.js's state.${attr} default`);
+  }
+});
+
 test('the interface no longer draws icons out of geometric Unicode', () => {
   // The set these replaced -- ▤ ◈ ▣ ☺ ⚙ -- renders at a different weight and
   // baseline on every platform, which is most of what made the old screens

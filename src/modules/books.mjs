@@ -190,34 +190,37 @@ export function postAdjustment(repo, input = {}) {
   }
 
   const now = nowIso();
-  const id = repo.insert('book_adjustment', {
-    id: ulid(), book_id: book.id, entry_no: entry_no || nextNumber(repo, 'book_adjustment'),
-    subsidiary_id, period_id: period.id, txn_date, memo: memo || '',
-    source_type, source_id, source_key,
-    total_debit: totalDebit, total_credit: totalCredit,
-    status: 'posted', is_reversal: 0, reverses_id: null, reversed_by_id: null,
-    created_at: now, created_by: repo.ctx?.user?.id || null,
-  });
-
-  prepared.forEach((l, i) => {
-    repo.insert('book_adjustment_line', {
-      id: ulid(), adjustment_id: id, line_no: i + 1,
-      account_id: l.account_id, base_debit: l.base_debit, base_credit: l.base_credit,
-      memo: l.memo || '',
-      department_id: l.department_id || null, location_id: l.location_id || null, class_id: l.class_id || null,
+  const id = repo.tx(() => {
+    const adjId = repo.insert('book_adjustment', {
+      id: ulid(), book_id: book.id, entry_no: entry_no || nextNumber(repo, 'book_adjustment'),
+      subsidiary_id, period_id: period.id, txn_date, memo: memo || '',
+      source_type, source_id, source_key,
+      total_debit: totalDebit, total_credit: totalCredit,
+      status: 'posted', is_reversal: 0, reverses_id: null, reversed_by_id: null,
+      created_at: now, created_by: repo.ctx?.user?.id || null,
     });
-    repo.exec(
-      `INSERT INTO book_balance (tenant_id, book_id, subsidiary_id, period_id, account_id, base_debit, base_credit)
-       VALUES (:t,?,?,?,?,?,?)
-       ON CONFLICT (tenant_id, book_id, subsidiary_id, period_id, account_id)
-       DO UPDATE SET base_debit = base_debit + excluded.base_debit,
-                     base_credit = base_credit + excluded.base_credit`,
-      [book.id, subsidiary_id, period.id, l.account_id, l.base_debit, l.base_credit]);
-  });
 
-  audit.record(repo, {
-    recordType: 'accounting_book', recordId: book.id, action: 'adjust',
-    changes: { book: { from: null, to: book.code }, amount: { from: null, to: Money.toNumber(totalDebit) } },
+    prepared.forEach((l, i) => {
+      repo.insert('book_adjustment_line', {
+        id: ulid(), adjustment_id: adjId, line_no: i + 1,
+        account_id: l.account_id, base_debit: l.base_debit, base_credit: l.base_credit,
+        memo: l.memo || '',
+        department_id: l.department_id || null, location_id: l.location_id || null, class_id: l.class_id || null,
+      });
+      repo.exec(
+        `INSERT INTO book_balance (tenant_id, book_id, subsidiary_id, period_id, account_id, base_debit, base_credit)
+         VALUES (:t,?,?,?,?,?,?)
+         ON CONFLICT (tenant_id, book_id, subsidiary_id, period_id, account_id)
+         DO UPDATE SET base_debit = base_debit + excluded.base_debit,
+                       base_credit = base_credit + excluded.base_credit`,
+        [book.id, subsidiary_id, period.id, l.account_id, l.base_debit, l.base_credit]);
+    });
+
+    audit.record(repo, {
+      recordType: 'accounting_book', recordId: book.id, action: 'adjust',
+      changes: { book: { from: null, to: book.code }, amount: { from: null, to: Money.toNumber(totalDebit) } },
+    });
+    return adjId;
   });
   return getAdjustment(repo, id);
 }
@@ -473,11 +476,11 @@ export function runBookDepreciation(repo, { book_id, through = today(), dry_run 
     // A bigger charge in this book is more expense and more accumulated
     // depreciation; a smaller one is the reverse.
     const d = p.difference;
-    // postAdjustment does not manage its own transaction, so each asset's
-    // adjustment is wrapped here -- both so its own several writes are
-    // atomic, and so one asset failing (an inactive account, say) cannot
-    // roll back adjustments this same run already posted for another asset.
-    const adj = repo.tx(() => postAdjustment(repo, {
+    // postAdjustment wraps its own writes in repo.tx(), so each asset's
+    // adjustment is atomic on its own, and one asset failing (an inactive
+    // account, say) cannot roll back adjustments this same run already
+    // posted for another asset.
+    const adj = postAdjustment(repo, {
       book_id: book.id, subsidiary_id: p.subsidiary_id, txn_date: p.depr_date,
       memo: `${p.asset_no} depreciation under ${book.name} — period ${p.period_no}`,
       source_type: 'depreciation', source_id: p.asset_id, source_key: p.source_key,
@@ -485,7 +488,7 @@ export function runBookDepreciation(repo, { book_id, through = today(), dry_run 
         { account_id: p.expense_account_id, base_debit: d > 0 ? d : 0, base_credit: d < 0 ? -d : 0, memo: 'Difference in charge' },
         { account_id: p.accum_account_id, base_debit: d < 0 ? -d : 0, base_credit: d > 0 ? d : 0, memo: 'Difference in accumulated depreciation' },
       ],
-    }));
+    });
     made.push({ ...p, entry_no: adj.entry_no, adjustment_id: adj.id });
   }
 

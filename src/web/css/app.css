@@ -113,6 +113,7 @@
 :root[data-palette="obsidian"] {
   /* Obsidian Chrome: A deep, rich midnight purple/black */
   --chrome: #0D0E1A;
+  --chrome-rgb: 13, 14, 26;
   --chrome-2: #16182D;
   --chrome-3: #1F223D;
   --chrome-text: #F0F1F7;
@@ -121,6 +122,12 @@
   --chrome-border: #262A46;
   --chrome-accent: #8B7BFF;
   --chrome-accent-soft: #1A1C38;
+
+  /* Extra series colours for charts with more than five segments --
+     shared across palettes; only the light/dark cut changes. */
+  --chart-brown: #C2762B;
+  --chart-purple: #8A6FB0;
+  --chart-blue: #4C8FA8;
 
   /* Soft Paper: A clean, neutral surface with a hint of cool blue */
   --bg: #F8F9FC;
@@ -162,29 +169,34 @@
 
 /* Retaining old palettes for compatibility, but mapped to new token logic */
 :root[data-palette="carbon"] {
-  --chrome: #0F1115; --chrome-2: #171A20; --chrome-3: #20242C; --chrome-text: #F5F6F8; --chrome-muted: #9CA3AF; --chrome-faint: #6B7280; --chrome-border: #262B33; --chrome-accent: #6E97F5; --chrome-accent-soft: #16233D;
+  --chrome: #0F1115; --chrome-rgb: 15, 17, 21; --chrome-2: #171A20; --chrome-3: #20242C; --chrome-text: #F5F6F8; --chrome-muted: #9CA3AF; --chrome-faint: #6B7280; --chrome-border: #262B33; --chrome-accent: #6E97F5; --chrome-accent-soft: #16233D;
   --bg: #F5F6F8; --surface: #FFFFFF; --surface-2: #FAFBFC; --surface-3: #EEF0F3; --surface-4: #E2E5EA; --border: #E2E5EA; --border-strong: #C7CCD4; --text: #10131A; --text-muted: #565D6B; --text-faint: #868D99;
   --accent: #2C5CE0; --accent-hover: #244CBD; --accent-press: #1D3D99; --accent-soft: #E9EEFC; --accent-soft-2: #D3DEF8; --accent-line: #A9BEF0; --accent-text: #FFFFFF;
+  --chart-brown: #C2762B; --chart-purple: #8A6FB0; --chart-blue: #4C8FA8;
 }
 :root[data-palette="ink"] {
-  --chrome: #17140F; --chrome-2: #221D16; --chrome-3: #2E271D; --chrome-text: #F6F1E8; --chrome-muted: #ADA294; --chrome-faint: #7C7264; --chrome-border: #2B251C; --chrome-accent: #E0A94A; --chrome-accent-soft: #322713;
+  --chrome: #17140F; --chrome-rgb: 23, 20, 15; --chrome-2: #221D16; --chrome-3: #2E271D; --chrome-text: #F6F1E8; --chrome-muted: #ADA294; --chrome-faint: #7C7264; --chrome-border: #2B251C; --chrome-accent: #E0A94A; --chrome-accent-soft: #322713;
   --bg: #F7F4EF; --surface: #FFFDFA; --surface-2: #FAF7F1; --surface-3: #F0EBE1; --surface-4: #E5DED1; --border: #E7E0D3; --border-strong: #CEC4B2; --text: #1A1611; --text-muted: #5F574A; --text-faint: #8B8173;
   --accent: #9C620E; --accent-hover: #845209; --accent-press: #6B4206; --accent-soft: #FBF1DC; --accent-soft-2: #F4E2C0; --accent-line: #E1C68D; --accent-text: #FFFFFF;
+  --chart-brown: #C2762B; --chart-purple: #8A6FB0; --chart-blue: #4C8FA8;
 }
 :root[data-palette="graphite"] {
-  --chrome: #1C1B19; --chrome-2: #272522; --chrome-3: #32302B; --chrome-text: #F2F1ED; --chrome-muted: #A8A59D; --chrome-faint: #79766F; --chrome-border: #2E2C28; --chrome-accent: #63C295; --chrome-accent-soft: #16291F;
+  --chrome: #1C1B19; --chrome-rgb: 28, 27, 25; --chrome-2: #272522; --chrome-3: #32302B; --chrome-text: #F2F1ED; --chrome-muted: #A8A59D; --chrome-faint: #79766F; --chrome-border: #2E2C28; --chrome-accent: #63C295; --chrome-accent-soft: #16291F;
   --bg: #F6F5F2; --surface: #FFFFFF; --surface-2: #FAFAF7; --surface-3: #EFEEE9; --surface-4: #E3E1DA; --border: #E5E3DC; --border-strong: #C8C5BB; --text: #191815; --text-muted: #5C594F; --text-faint: #89857A;
   --accent: #156F4A; --accent-hover: #115C3D; --accent-press: #0D4730; --accent-soft: #E7F2EC; --accent-soft-2: #D2E7DB; --accent-line: #A6CEBB; --accent-text: #FFFFFF;
+  --chart-brown: #C2762B; --chart-purple: #8A6FB0; --chart-blue: #4C8FA8;
 }
 :root[data-palette="slate"] {
-  --chrome: #16202B; --chrome-2: #1F2B38; --chrome-3: #293746; --chrome-text: #EFF3F7; --chrome-muted: #9FADBB; --chrome-faint: #71808F; --chrome-border: #243141; --chrome-accent: #4FC4C7; --chrome-accent-soft: #102A2C;
+  --chrome: #16202B; --chrome-rgb: 22, 32, 43; --chrome-2: #1F2B38; --chrome-3: #293746; --chrome-text: #EFF3F7; --chrome-muted: #9FADBB; --chrome-faint: #71808F; --chrome-border: #243141; --chrome-accent: #4FC4C7; --chrome-accent-soft: #102A2C;
   --bg: #F3F5F7; --surface: #FFFFFF; --surface-2: #FAFBFC; --surface-3: #EDF0F3; --surface-4: #E1E6EB; --border: #DFE4EA; --border-strong: #C3CBD4; --text: #111A22; --text-muted: #56626E; --text-faint: #83909D;
   --accent: #0E6F72; --accent-hover: #0B5B5E; --accent-press: #084749; --accent-soft: #E3F2F2; --accent-soft-2: #C9E6E7; --accent-line: #9CD2D4; --accent-text: #FFFFFF;
+  --chart-brown: #C2762B; --chart-purple: #8A6FB0; --chart-blue: #4C8FA8;
 }
 :root[data-palette="midnight"] {
-  --chrome: #14152B; --chrome-2: #1D1F3A; --chrome-3: #272949; --chrome-text: #F0F0FA; --chrome-muted: #A3A3C2; --chrome-faint: #74749A; --chrome-border: #212342; --chrome-accent: #9A8CFF; --chrome-accent-soft: #232149;
+  --chrome: #14152B; --chrome-rgb: 20, 21, 43; --chrome-2: #1D1F3A; --chrome-3: #272949; --chrome-text: #F0F0FA; --chrome-muted: #A3A3C2; --chrome-faint: #74749A; --chrome-border: #212342; --chrome-accent: #9A8CFF; --chrome-accent-soft: #232149;
   --bg: #F5F5FB; --surface: #FFFFFF; --surface-2: #FAFAFE; --surface-3: #EEEEF7; --surface-4: #E2E2F0; --border: #E3E3F0; --border-strong: #C6C6DC; --text: #14142A; --text-muted: #565676; --text-faint: #8686A4;
   --accent: #5546C8; --accent-hover: #4638A8; --accent-press: #382C87; --accent-soft: #EEEBFC; --accent-soft-2: #DCD7F8; --accent-line: #BDB4EF; --accent-text: #FFFFFF;
+  --chart-brown: #C2762B; --chart-purple: #8A6FB0; --chart-blue: #4C8FA8;
 }
 
 /* =====================================================================
@@ -202,6 +214,7 @@
 [data-theme="dark"],
 [data-theme="dark"][data-palette="obsidian"] {
   --chrome: #080912;
+  --chrome-rgb: 8, 9, 18;
   --chrome-2: #0F111F;
   --chrome-3: #16192C;
   --chrome-text: #E2E4F0;
@@ -210,6 +223,11 @@
   --chrome-border: #1E223A;
   --chrome-accent: #8B7BFF;
   --chrome-accent-soft: #1A1C38;
+
+  /* Lighter than the light-mode cut, for contrast against the dark surfaces. */
+  --chart-brown: #D99A4F;
+  --chart-purple: #A891C9;
+  --chart-blue: #6FB0C4;
 
   --bg: #0B0D17;
   --surface: #121526;
@@ -252,39 +270,65 @@
    (pos/neg/warn/info) and the two rings are shared with Obsidian's dark cut
    on purpose: a warning is the same warning whichever palette is open. */
 [data-theme="dark"][data-palette="carbon"] {
-  --chrome: #080B12; --chrome-2: #0F141F; --chrome-3: #161E2C; --chrome-text: #E7E9ED; --chrome-muted: #9CA3AF; --chrome-faint: #6B7280; --chrome-border: #1D2739; --chrome-accent: #6E97F5; --chrome-accent-soft: #16233D;
+  --chrome: #080B12; --chrome-rgb: 8, 11, 18; --chrome-2: #0F141F; --chrome-3: #161E2C; --chrome-text: #E7E9ED; --chrome-muted: #9CA3AF; --chrome-faint: #6B7280; --chrome-border: #1D2739; --chrome-accent: #6E97F5; --chrome-accent-soft: #16233D;
   --bg: #0C1018; --surface: #121926; --surface-2: #1A2232; --surface-3: #20293C; --surface-4: #2C374E; --border: #242C3D; --border-strong: #364259; --text: #E1E6EF; --text-muted: #A2A8B4; --text-faint: #777D88;
   --accent: #6E97F5; --accent-hover: #94B0FF; --accent-press: #B3C7FF; --accent-soft: #16233D; --accent-soft-2: #243051; --accent-line: #334470; --accent-text: #090F20;
   --pos: #4FC08D; --neg: #F0847A; --warn: #DFAE59; --info: #6FB2E8; --pos-soft: #10261C; --neg-soft: #2B1815; --warn-soft: #291F10; --info-soft: #12222E;
   --row-hover: #1C2034; --row-selected: #22204A; --ring: 0 0 0 3px rgba(110, 151, 245, .26); --ring-neg: 0 0 0 3px rgba(255, 123, 123, .22); --accent-rgb: 110, 151, 245;
+  --chart-brown: #D99A4F; --chart-purple: #A891C9; --chart-blue: #6FB0C4;
 }
 [data-theme="dark"][data-palette="ink"] {
-  --chrome: #120E08; --chrome-2: #1F190F; --chrome-3: #2C2416; --chrome-text: #F6F1E8; --chrome-muted: #ADA294; --chrome-faint: #7C7264; --chrome-border: #392F1D; --chrome-accent: #E0A94A; --chrome-accent-soft: #322713;
+  --chrome: #120E08; --chrome-rgb: 18, 14, 8; --chrome-2: #1F190F; --chrome-3: #2C2416; --chrome-text: #F6F1E8; --chrome-muted: #ADA294; --chrome-faint: #7C7264; --chrome-border: #392F1D; --chrome-accent: #E0A94A; --chrome-accent-soft: #322713;
   --bg: #18140C; --surface: #261F12; --surface-2: #322A1A; --surface-3: #3C3220; --surface-4: #4E422C; --border: #3D3424; --border-strong: #594C36; --text: #EFEAE1; --text-muted: #B4ADA2; --text-faint: #888277;
   --accent: #E0A94A; --accent-hover: #FFD294; --accent-press: #FFDFB3; --accent-soft: #322713; --accent-soft-2: #513E24; --accent-line: #705733; --accent-text: #201609;
   --pos: #4FC08D; --neg: #F0847A; --warn: #DFAE59; --info: #6FB2E8; --pos-soft: #10261C; --neg-soft: #2B1815; --warn-soft: #291F10; --info-soft: #12222E;
   --row-hover: #1C2034; --row-selected: #22204A; --ring: 0 0 0 3px rgba(224, 169, 74, .26); --ring-neg: 0 0 0 3px rgba(255, 123, 123, .22); --accent-rgb: 224, 169, 74;
+  --chart-brown: #D99A4F; --chart-purple: #A891C9; --chart-blue: #6FB0C4;
 }
 [data-theme="dark"][data-palette="graphite"] {
-  --chrome: #120E08; --chrome-2: #1F1A0F; --chrome-3: #2C2516; --chrome-text: #F2F1ED; --chrome-muted: #A8A59D; --chrome-faint: #79766F; --chrome-border: #39301D; --chrome-accent: #63C295; --chrome-accent-soft: #16291F;
+  --chrome: #120E08; --chrome-rgb: 18, 14, 8; --chrome-2: #1F1A0F; --chrome-3: #2C2516; --chrome-text: #F2F1ED; --chrome-muted: #A8A59D; --chrome-faint: #79766F; --chrome-border: #39301D; --chrome-accent: #63C295; --chrome-accent-soft: #16291F;
   --bg: #18140C; --surface: #261F12; --surface-2: #322A1A; --surface-3: #3C3220; --surface-4: #4E432C; --border: #3D3524; --border-strong: #594D36; --text: #EFEAE1; --text-muted: #B4AEA2; --text-faint: #888277;
   --accent: #63C295; --accent-hover: #94FFD2; --accent-press: #B3FFDF; --accent-soft: #16291F; --accent-soft-2: #24513E; --accent-line: #337057; --accent-text: #092016;
   --pos: #4FC08D; --neg: #F0847A; --warn: #DFAE59; --info: #6FB2E8; --pos-soft: #10261C; --neg-soft: #2B1815; --warn-soft: #291F10; --info-soft: #12222E;
   --row-hover: #1C2034; --row-selected: #22204A; --ring: 0 0 0 3px rgba(99, 194, 149, .26); --ring-neg: 0 0 0 3px rgba(255, 123, 123, .22); --accent-rgb: 99, 194, 149;
+  --chart-brown: #D99A4F; --chart-purple: #A891C9; --chart-blue: #6FB0C4;
 }
 [data-theme="dark"][data-palette="slate"] {
-  --chrome: #080D12; --chrome-2: #0F171F; --chrome-3: #16212C; --chrome-text: #EFF3F7; --chrome-muted: #9FADBB; --chrome-faint: #71808F; --chrome-border: #1D2B39; --chrome-accent: #4FC4C7; --chrome-accent-soft: #102A2C;
+  --chrome: #080D12; --chrome-rgb: 8, 13, 18; --chrome-2: #0F171F; --chrome-3: #16212C; --chrome-text: #EFF3F7; --chrome-muted: #9FADBB; --chrome-faint: #71808F; --chrome-border: #1D2B39; --chrome-accent: #4FC4C7; --chrome-accent-soft: #102A2C;
   --bg: #0C1218; --surface: #121C26; --surface-2: #1A2632; --surface-3: #202D3C; --surface-4: #2C3D4E; --border: #24303D; --border-strong: #364759; --text: #E1E8EF; --text-muted: #A2ABB4; --text-faint: #777F88;
   --accent: #4FC4C7; --accent-hover: #94FBFF; --accent-press: #B3FCFF; --accent-soft: #102A2C; --accent-soft-2: #244F51; --accent-line: #336E70; --accent-text: #091F20;
   --pos: #4FC08D; --neg: #F0847A; --warn: #DFAE59; --info: #6FB2E8; --pos-soft: #10261C; --neg-soft: #2B1815; --warn-soft: #291F10; --info-soft: #12222E;
   --row-hover: #1C2034; --row-selected: #22204A; --ring: 0 0 0 3px rgba(79, 196, 199, .26); --ring-neg: 0 0 0 3px rgba(255, 123, 123, .22); --accent-rgb: 79, 196, 199;
+  --chart-brown: #D99A4F; --chart-purple: #A891C9; --chart-blue: #6FB0C4;
 }
 [data-theme="dark"][data-palette="midnight"] {
-  --chrome: #080812; --chrome-2: #0F101F; --chrome-3: #16172C; --chrome-text: #F0F0FA; --chrome-muted: #A3A3C2; --chrome-faint: #74749A; --chrome-border: #1D1F39; --chrome-accent: #9A8CFF; --chrome-accent-soft: #232149;
+  --chrome: #080812; --chrome-rgb: 8, 8, 18; --chrome-2: #0F101F; --chrome-3: #16172C; --chrome-text: #F0F0FA; --chrome-muted: #A3A3C2; --chrome-faint: #74749A; --chrome-border: #1D1F39; --chrome-accent: #9A8CFF; --chrome-accent-soft: #232149;
   --bg: #0C0C18; --surface: #121326; --surface-2: #1A1B32; --surface-3: #20223C; --surface-4: #2C2E4E; --border: #24253D; --border-strong: #363859; --text: #E1E1EF; --text-muted: #A2A3B4; --text-faint: #777788;
   --accent: #9A8CFF; --accent-hover: #A094FF; --accent-press: #BBB3FF; --accent-soft: #232149; --accent-soft-2: #2A2451; --accent-line: #3A3370; --accent-text: #0C0920;
   --pos: #4FC08D; --neg: #F0847A; --warn: #DFAE59; --info: #6FB2E8; --pos-soft: #10261C; --neg-soft: #2B1815; --warn-soft: #291F10; --info-soft: #12222E;
   --row-hover: #1C2034; --row-selected: #22204A; --ring: 0 0 0 3px rgba(154, 140, 255, .26); --ring-neg: 0 0 0 3px rgba(255, 123, 123, .22); --accent-rgb: 154, 140, 255;
+  --chart-brown: #D99A4F; --chart-purple: #A891C9; --chart-blue: #6FB0C4;
+}
+
+/* Glass's deeper cut of Obsidian -- see the "Look: Glass" section near the
+   end of this file for the shape and motion rules that go with it. Kept
+   here, with the other palette-colour blocks, rather than down there,
+   because this one -- unlike the rest of that section -- declares actual
+   colours rather than shape or motion. The five compatibility palettes
+   keep their own hues unscaled; Glass changes shape and motion for them,
+   not colour, since they never asked to be restyled. */
+:root[data-look="glass"][data-palette="obsidian"] {
+  --chrome: #0A0B14;
+  --chrome-rgb: 10, 11, 20;
+  --chrome-2: #121428;
+  --chrome-3: #1C203D;
+  --chrome-text: #F8F9FC;
+  --chrome-border: #242844;
+  --bg: #F0F2F9;
+  --border: #DDE1F0;
+}
+[data-theme="dark"][data-look="glass"][data-palette="obsidian"] {
+  --bg: #070810;
 }
 
 /* =====================================================================
@@ -819,6 +863,8 @@ table.grid tfoot td {
 .field.checkbox .help { flex-basis: 100%; padding-left: 24px; margin-top: -2px; }
 .field input[type="number"], .field input.num { text-align: right; font-variant-numeric: tabular-nums; }
 .field input[type="date"] { cursor: text; }
+.address-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.address-span { grid-column: span 2; }
 .form-section { margin-top: var(--s6); }
 .form-section > h3 {
   font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-faint);
@@ -961,6 +1007,7 @@ fieldset { border: 0; margin: 0; padding: 0; }
 .toast.error { border-left-color: var(--neg); }
 .toast.success { border-left-color: var(--pos); }
 .toast.warn { border-left-color: var(--warn); }
+.toast.info { border-left-color: var(--info); }
 .toast .t { font-weight: 600; font-size: 13px; }
 .toast .m { font-size: 13px; color: var(--text-muted); margin-top: 2px; white-space: pre-wrap; }
 .toast .x { margin-left: auto; cursor: pointer; background: none; border: 0; padding: 4px; display: flex; border-radius: var(--radius-sm); color: var(--text-faint); }
@@ -1254,6 +1301,24 @@ kbd, .kbd {
 .swatch-note { color: var(--text-muted); font-size: var(--t-xs); line-height: 1.5; margin-top: 2px; }
 .swatch.active .swatch-name { color: var(--accent); }
 
+/* Look picker: two swatches, each a miniature of its own shape language --
+   Glass's translucent blurred bar over a gradient, Dock's flat dark panel
+   with a pill-shaped accent bar -- rather than colour, which is what the
+   palette swatches above already show. The preview's own fixed colours
+   are painted from JS (LOOK_PREVIEWS in settings.js), the same way the
+   palette swatch chips are, since they show a specific look's colours
+   regardless of which palette is presently active -- not a token. */
+.look-swatch-glass .swatch-chips::after {
+  content: ""; position: absolute; inset: 8px 8px auto 40px; height: 14px;
+  border-radius: 999px; background: rgba(255, 255, 255, .6);
+  border: 1px solid rgba(99, 102, 241, .25); backdrop-filter: blur(4px);
+}
+.look-swatch-dock .swatch-chips::after {
+  content: ""; position: absolute; inset: 8px 8px auto 40px; height: 14px;
+  border-radius: 999px; border: 1px solid rgba(255, 255, 255, .15);
+}
+.look-swatch .swatch-chips .icon-chip { background: var(--accent-soft); color: var(--accent); }
+
 .type-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--s3); }
 .type-card {
   border: 1px solid var(--border-strong); background: var(--surface); border-radius: var(--radius-lg);
@@ -1498,3 +1563,110 @@ kbd, .kbd {
   table.grid th { background: #fff; border-bottom: 1.5px solid #000; }
   a { color: inherit; text-decoration: none; }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important; scroll-behavior: auto !important;
+  }
+}
+
+/* =====================================================================
+   Look: Glass
+   ---------------------------------------------------------------------
+   Everything above this point -- the file's unscoped default -- is Dock:
+   the CoolDock-inspired look this application shipped with (dark chrome
+   KPI tiles, pill controls, a flat topbar). Glass is the second look,
+   opted into with <html data-look="glass">: softer corners, a
+   translucent blurred topbar, springy modal motion and hover lift, and
+   surface-coloured (not dark chrome) KPI tiles, login header and
+   welcome hero. Selecting it never redeclares a colour token outside a
+   palette block -- only shape, motion and which existing tokens a
+   component draws from -- so "no component names a colour of its own"
+   still holds and every palette still works under either look.
+   ===================================================================== */
+:root[data-look="glass"] {
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  /* Folds every ".btn.lg" / searchbox / chip-select pill shape back into a
+     rounded rectangle in one place, rather than restating each selector. */
+  --radius-pill: 10px;
+}
+
+[data-look="glass"] .topbar {
+  background: rgba(var(--chrome-rgb), .85);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .2);
+}
+[data-look="glass"] .search-results { backdrop-filter: var(--glass-blur); }
+
+[data-look="glass"] .sidebar { box-shadow: inset -10px 0 20px rgba(0, 0, 0, .2); }
+[data-look="glass"] .nav-item.active { box-shadow: inset 4px 0 0 var(--chrome-accent); }
+
+@keyframes glass-page-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+[data-look="glass"] .page { animation: glass-page-enter .3s cubic-bezier(.4, 0, .2, 1); }
+
+[data-look="glass"] .btn.primary { box-shadow: 0 4px 12px rgba(99, 102, 241, .3); transition: all var(--fast); }
+[data-look="glass"] .btn.primary:hover:not(:disabled) {
+  filter: brightness(1.1); transform: translateY(-2px) scale(1.01); box-shadow: 0 6px 16px rgba(99, 102, 241, .4);
+}
+[data-look="glass"] .btn.primary:active:not(:disabled) { transform: translateY(0) scale(1); }
+
+[data-look="glass"] .card { transition: all var(--med); }
+[data-look="glass"] .card:hover,
+[data-look="glass"] .kpi.linked:hover {
+  background: linear-gradient(to bottom right, var(--surface), var(--surface-2));
+}
+
+[data-look="glass"] .overlay { background: rgba(10, 14, 22, .6); backdrop-filter: blur(12px); }
+@keyframes glass-modal-in { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+[data-look="glass"] .modal {
+  box-shadow: 0 20px 50px rgba(0, 0, 0, .2), 0 0 0 1px rgba(255, 255, 255, .1);
+  animation: glass-modal-in .3s cubic-bezier(.34, 1.56, .64, 1);
+}
+[data-look="glass"] .field input:focus,
+[data-look="glass"] .field select:focus,
+[data-look="glass"] .field textarea:focus {
+  box-shadow: 0 0 0 4px var(--accent-soft); transition: all var(--fast);
+}
+
+/* Table header rule and zebra striping. Hover and selected are restated
+   here, or the zebra row's equal specificity (both are one type + one
+   pseudo/class deep on <tr>) would let it win by simply coming later. */
+[data-look="glass"] table.grid th { border-bottom: 2px solid var(--border); }
+[data-look="glass"] table.grid tbody tr:nth-child(even) td { background: var(--surface-2); }
+[data-look="glass"] table.grid tbody tr.clickable:hover td { background: var(--row-hover); }
+[data-look="glass"] table.grid tbody tr.selected td { background: var(--row-selected); }
+
+/* KPI tiles: a surface-coloured card like every other card in Glass,
+   rather than Dock's dark instrument-panel tile. */
+[data-look="glass"] .kpi { background: var(--surface); border-color: var(--border); color: var(--text); }
+[data-look="glass"] .kpi .k-label { color: var(--text-muted); }
+[data-look="glass"] .kpi .k-value { color: var(--text); }
+[data-look="glass"] .kpi .k-meta { color: var(--text-muted); }
+[data-look="glass"] .kpi .drag { color: var(--text-faint); }
+[data-look="glass"] .kpi .drag:hover { color: var(--text); }
+[data-look="glass"] .kpi.linked:hover {
+  border-color: var(--accent-line); box-shadow: var(--shadow); transform: translateY(-4px);
+}
+[data-look="glass"] .kpi.drop-target { background: var(--accent-soft); }
+[data-look="glass"] .icon-chip.on-dark { background: var(--accent-soft); color: var(--accent); }
+
+/* Login header and welcome hero: a light accent-tinted panel instead of
+   the dark chrome tile Dock introduces itself with. */
+[data-look="glass"] .login-head { background: var(--surface); color: var(--text); }
+[data-look="glass"] .login-title { color: var(--text); }
+[data-look="glass"] .login-sub { color: var(--text-muted); }
+
+[data-look="glass"] .welcome-hero {
+  background: linear-gradient(155deg, var(--accent-soft) 0%, var(--surface) 78%);
+  border-bottom: 1px solid var(--border);
+}
+[data-look="glass"] .welcome-hero h2 { color: var(--text); }
+[data-look="glass"] .welcome-hero p { color: var(--text-muted); }
+
+[data-look="glass"] .empty .big { width: 64px; height: 64px; border-radius: 50%; }
+
+[data-look="glass"] .page-head.hero h1 { font-size: var(--t-display-sm); letter-spacing: -.03em; }

@@ -64,7 +64,7 @@ export async function renderSetup(app, onDone) {
   });
 
   const errBox = h('div.login-error.hidden');
-  const submit = h('button.btn.primary', { type: 'submit', style: { width: '100%', height: '34px', justifyContent: 'center' } },
+  const submit = h('button.btn.primary', { type: 'submit', style: { width: '100%', height: 'var(--control-h)', justifyContent: 'center' } },
     'Create company');
 
   const fail = (message, field) => {

@@ -8,7 +8,7 @@ import * as fmt from './format.js';
 export const state = {
   user: null, tenant: null, permissions: {}, roles: [], restrictions: {},
   meta: null, savedSearches: [], notifications: [], unread: 0,
-  subsidiary: null, theme: 'light', palette: 'obsidian', typeface: 'styrene',
+  subsidiary: null, theme: 'light', palette: 'obsidian', typeface: 'styrene', look: 'glass',
 };
 
 const refCache = new Map();
@@ -160,18 +160,24 @@ const uniq = (a) => [...new Set(a)];
 
 // ----------------------------------------------------------- appearance
 /**
- * Appearance is three independent choices, each an attribute on <html> that
+ * Appearance is four independent choices, each an attribute on <html> that
  * the stylesheet reads:
  *
  *   palette    which colours          ink | graphite | slate | midnight
  *   theme      light or dark cut of that palette
  *   typeface   which family and type scale
+ *   look       which shape language   glass | dock
  *
  * They are independent on purpose. Somebody who wants the green palette in
  * dark mode with the serif headings should not have to pick from twelve
  * pre-baked combinations, and a palette added next year should not multiply
  * the list again.
  */
+export const LOOKS = [
+  { id: 'glass', name: 'Glass', note: 'Soft glassmorphism, springy motion, rounded surfaces' },
+  { id: 'dock', name: 'Dock', note: 'Dark instrument-panel KPI tiles, pill controls' },
+];
+
 export const PALETTES = [
   { id: 'obsidian', name: 'Obsidian & Indigo', note: 'The default: midnight chrome, electric indigo accent' },
   { id: 'carbon', name: 'Carbon & Cobalt', note: 'Cool graphite chrome, vivid cobalt accent' },
@@ -217,6 +223,16 @@ export function setTheme(theme) {
 }
 export const toggleTheme = () => setTheme(state.theme === 'dark' ? 'light' : 'dark');
 
+export function setLook(id) {
+  // Same fallback logic as setPalette -- an unrecognised value must not leave
+  // the shell with no shape rules at all.
+  const value = has(LOOKS, id) ? id : 'glass';
+  state.look = value;
+  document.documentElement.setAttribute('data-look', value);
+  setPref('ui.look', value);
+  return value;
+}
+
 export function setPalette(id) {
   // An unknown value would leave the page with no colour tokens at all, which
   // is a white screen rather than a wrong one -- so fall back rather than trust.
@@ -241,6 +257,7 @@ export function setTypeface(id) {
  * another.
  */
 export function initAppearance() {
+  setLook(getPref('ui.look', 'glass'));
   setPalette(getPref('ui.palette', 'obsidian'));
   setTypeface(getPref('ui.typeface', 'styrene'));
   initTheme();

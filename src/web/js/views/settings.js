@@ -71,6 +71,27 @@ const palettePicker = (current, onPick) => h('div.swatch-row',
       h('div.swatch-name', pal.name, pal.id === current && icon('check', { size: 13 })),
       h('div.swatch-note', pal.note)))));
 
+const LOOK_ICONS = { glass: 'layers', dock: 'grid' };
+// Fixed preview colours for the look swatches, painted the same way
+// PALETTE_CHIPS above is: inline, not through app.css, since each preview
+// shows that look's own colours regardless of which palette is active.
+const LOOK_PREVIEWS = {
+  glass: 'linear-gradient(155deg, #EEF2FF 0%, #FFFFFF 78%)',
+  dock: '#16182D',
+};
+
+const lookPicker = (current, onPick) => h('div.swatch-row',
+  ...store.LOOKS.map((lk) => h('button.swatch', {
+    class: `look-swatch look-swatch-${lk.id}${lk.id === current ? ' active' : ''}`,
+    title: lk.note,
+    onclick: () => onPick(lk.id),
+  },
+    h('div.swatch-chips', { style: { background: LOOK_PREVIEWS[lk.id] } },
+      h('div.icon-chip.on-dark', icon(LOOK_ICONS[lk.id] || 'eye', { size: 12 }))),
+    h('div.swatch-body',
+      h('div.swatch-name', lk.name, lk.id === current && icon('check', { size: 13 })),
+      h('div.swatch-note', lk.note)))));
+
 const typefacePicker = (current, onPick) => h('div.type-row',
   ...store.TYPEFACES.map((face) => h('button.type-card', {
     class: `tf-${face.id}${face.id === current ? ' active' : ''}`,
@@ -139,6 +160,12 @@ const SECTION_RENDERERS = {
   appearance: () => h('section.doc-section',
     h('h2', 'Appearance'),
     h('p.lede', 'These are stored on this computer, for you. Somebody else signing in here — or you signing in elsewhere — gets their own.'),
+    setting('Look',
+      'The shape language for every screen — corners, motion, and how dense controls read. Colour and typeface below apply to either.',
+      lookPicker(store.state.look, (value) => {
+        store.setLook(value);
+        window.__meridianGo('/settings/appearance');
+      }), { stacked: true }),
     setting('Colour scheme',
       'Each one is a complete palette with its own light and dark cut, so this and the theme below are separate choices.',
       palettePicker(store.state.palette, (value) => {

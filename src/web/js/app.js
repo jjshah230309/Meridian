@@ -565,7 +565,7 @@ function accountMenu(anchor) {
       onClick: () => { store.toggleTheme(); renderShellThemeIcons(); },
     },
     {
-      label: 'Colour scheme & typeface', icon: 'eye', sub: paletteLabel(),
+      label: 'Look, colour & typeface', icon: 'eye', sub: paletteLabel(),
       onClick: () => go('/settings/appearance'),
     },
     {
@@ -585,9 +585,10 @@ function accountMenu(anchor) {
 }
 
 const paletteLabel = () => {
+  const look = store.LOOKS.find((l) => l.id === store.state.look);
   const pal = store.PALETTES.find((p) => p.id === store.state.palette);
   const face = store.TYPEFACES.find((t) => t.id === store.state.typeface);
-  return `${pal?.name || 'Carbon & Cobalt'} · ${face?.name || 'Styrene & Tiempos'}`;
+  return `${look?.name || 'Glass'} · ${pal?.name || 'Carbon & Cobalt'} · ${face?.name || 'Styrene & Tiempos'}`;
 };
 
 /** After a theme change from a menu, the topbar's own icon has to agree. */

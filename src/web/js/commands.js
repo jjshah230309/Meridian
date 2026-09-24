@@ -126,6 +126,17 @@ export function registerCommands() {
       run: () => store.toggleTheme(),
     },
     {
+      id: 'view.look', title: 'Switch look', icon: 'layers', group: 'View',
+      subtitle: store.LOOKS.map((l) => l.name).join(', '),
+      run: () => {
+        const ids = store.LOOKS.map((l) => l.id);
+        const next = ids[(ids.indexOf(store.state.look) + 1) % ids.length];
+        const chosen = store.LOOKS.find((l) => l.id === next);
+        store.setLook(next);
+        toast(chosen.name, { kind: 'info', title: 'Look', timeout: 2200 });
+      },
+    },
+    {
       id: 'view.palette', title: 'Next colour scheme', icon: 'eye', group: 'View',
       subtitle: store.PALETTES.map((p) => p.name).join(', '),
       run: () => {

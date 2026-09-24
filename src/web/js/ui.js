@@ -66,7 +66,7 @@ export function anchoredMenu(anchor, items, { align = 'right', minWidth = null }
         try { await it.onClick?.(e); } catch (err) { notifyError(err); }
       },
     },
-      it.icon ? icon(it.icon, { size: 15 }) : h('span', { style: { width: '15px' } }),
+      it.icon ? icon(it.icon, { size: 16 }) : h('span', { style: { width: 'var(--s4)' } }),
       h('span', { style: { minWidth: 0 } }, it.label, it.sub && h('div.m-sub', it.sub)),
       it.checked ? icon('check', { size: 14, className: 'keys' }) : null,
       it.keys && h('span.keys', renderMenuKeys(it.keys)));
@@ -79,7 +79,7 @@ export function anchoredMenu(anchor, items, { align = 'right', minWidth = null }
   // guessing means the last item lands under the bottom of the window.
   const r = anchor.getBoundingClientRect();
   const w = el.offsetWidth, hgt = el.offsetHeight;
-  const gap = 6;
+  const gap = 8;
   let left = align === 'left' ? r.left : r.right - w;
   left = Math.min(Math.max(8, left), Math.max(8, window.innerWidth - w - 8));
   let top = r.bottom + gap;
@@ -158,7 +158,7 @@ export function confirm({ title = 'Are you sure?', message, confirmLabel = 'Conf
     let settled = false;
     modal({
       title, size: 'narrow',
-      body: h('div', h('div', message), detail && h('div.muted', { style: { marginTop: '8px', fontSize: '12px' } }, detail)),
+      body: h('div', h('div', message), detail && h('div.muted', { style: { marginTop: 'var(--s2)', fontSize: 'var(--t-sm)' } }, detail)),
       actions: [
         { label: 'Cancel', value: false },
         { label: confirmLabel, kind: danger ? 'danger' : 'primary', onClick: () => { settled = true; resolve(true); } },
@@ -295,7 +295,7 @@ function addressControl(f, value, onChange) {
   const v = (typeof value === 'object' && value) || {};
   const parts = f.subfields || ['line1', 'line2', 'city', 'state', 'postcode', 'country'];
   const inputs = {};
-  const grid = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' } });
+  const grid = h('div.address-grid');
   for (const p of parts) {
     const inp = h('input', {
       type: 'text', placeholder: fmt.titleCase(p), disabled: f.readOnly,
@@ -303,7 +303,7 @@ function addressControl(f, value, onChange) {
     });
     inp.value = v[p] ?? '';
     inputs[p] = inp;
-    grid.appendChild(h('div', { style: { gridColumn: p === 'line1' || p === 'line2' ? 'span 2' : 'span 1' } }, inp));
+    grid.appendChild(h('div', { class: p === 'line1' || p === 'line2' ? 'address-span' : '' }, inp));
   }
   const get = () => Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value]).filter(([, x]) => x));
   const err = h('div.err.hidden');
@@ -336,7 +336,7 @@ export function displayValue(f, value, row) {
     case 'tags': {
       const items = Array.isArray(value) ? value : String(value).split(',').filter(Boolean);
       if (!items.length) return h('span.faint', '—');
-      return h('span.row.wrap', { style: { gap: '4px' } },
+      return h('span.row-tight.wrap',
         ...items.map((v) => h('span.tag', fmt.titleCase(String(v).trim()))));
     }
     case 'select': {
@@ -373,7 +373,7 @@ export const empty = (title, message, action, iconName = 'inbox', tone = '--text
     action && h('div', { style: { marginTop: 'var(--s4)' } }, action));
 
 export const loading = (label = 'Loading') =>
-  h('div.empty', h('div', h('span.spinner')), h('div.muted', { style: { marginTop: '8px' } }, label + '…'));
+  h('div.empty', h('div', h('span.spinner')), h('div.muted', { style: { marginTop: 'var(--s2)' } }, label + '…'));
 
 export const tag = (text, tone = '') => h('span.tag', { class: tone }, text);
 export const statusTag = (s) => h('span.tag', { class: fmt.statusTone(s) }, fmt.titleCase(s || '—'));
