@@ -283,7 +283,7 @@ export function createServer(config, db) {
         // `inline` lets a browser render it; a download needs the filename.
         if (result.__filename !== undefined || result.__csv !== undefined) {
           headers['Content-Disposition'] =
-            `${result.__inline ? 'inline' : 'attachment'}; filename="${result.__filename || 'export.csv'}"`;
+            httpx.contentDisposition(result.__filename || 'export.csv', { inline: result.__inline });
         }
         return httpx.send(res, result.__status || 200, payload, headers);
       }

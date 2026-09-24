@@ -8,6 +8,7 @@ import * as fmt from '../format.js';
 import * as store from '../store.js';
 import { fieldControl, displayValue, empty, loading, toast, notifyError, confirm, modal, statusTag, facts, formatAddress, moneyCell } from '../ui.js';
 import { icon } from '../icons.js';
+import { attachmentsCard } from '../attachments.js';
 
 const SYSTEM_SECTION = 'System';
 
@@ -49,6 +50,7 @@ export async function recordView(route, { go }) {
         h('div.stack',
           summaryCard(type, record, data),
           data.activities?.length ? activityCard(data.activities) : null,
+          attachmentsCard(type, record.id, { canEdit }),
           data.audit?.length ? auditCard(data.audit) : null)));
   }
 

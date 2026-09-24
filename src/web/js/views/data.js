@@ -7,7 +7,7 @@ import { icon } from '../icons.js';
 import { API } from '../api.js';
 import * as fmt from '../format.js';
 import * as store from '../store.js';
-import { empty, toast, notifyError, notifyOk, modal, confirm, statusTag, facts, loading, displayValue } from '../ui.js';
+import { empty, toast, notifyError, notifyOk, modal, confirm, statusTag, facts, loading, displayValue, readFileAsBase64, filePicker } from '../ui.js';
 
 const TABS = [
   { id: 'import', label: 'Import', perm: 'data_import' },
@@ -61,32 +61,10 @@ function readFileAsText(file) {
     reader.readAsText(file);
   });
 }
-function readFileAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || '').split(',', 2)[1] || '');
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
-    reader.readAsDataURL(file);
-  });
-}
 /** A file's contents in the shape every import route already accepts. */
 async function readFileBody(file) {
   return isSpreadsheet(file) ? { data: await readFileAsBase64(file) } : { text: await readFileAsText(file) };
 }
-
-const filePicker = (accept, onPick, { multiple = false } = {}) => {
-  const input = h('input', {
-    type: 'file', accept, multiple, style: { display: 'none' },
-    onchange: async () => {
-      const files = [...(input.files || [])];
-      if (!files.length) return;
-      try { await onPick(files); }
-      catch (e) { notifyError(e); }
-      finally { input.value = ''; }     // let the same file(s) be picked twice
-    },
-  });
-  return input;
-};
 
 // ------------------------------------------------------------------ import
 //

@@ -28,6 +28,7 @@ import * as schedules from './modules/schedules.mjs';
 import * as recurring from './modules/recurring.mjs';
 import * as revaluation from './modules/revaluation.mjs';
 import * as customRecords from './modules/customrecords.mjs';
+import * as attachments from './modules/attachments.mjs';
 import { HANDLERS, coerce, genericCreate, genericUpdate, blockersFor } from './modules/records.mjs';
 import { registerOpsRoutes } from './api_ops.mjs';
 import { registerDataRoutes, registerODataRoutes, registerSoapRoutes } from './api_data.mjs';
@@ -403,6 +404,50 @@ export function buildApi({ config }) {
       audit.record(ctx.repo, { recordType: type, recordId: id, action: 'delete', before });
       return { ok: true, deleted: id };
     });
+  });
+
+  // ----------------------------------------------------------- attachments
+  // Record-type-agnostic on purpose, rather than nested under
+  // /records/:type/:id -- the same four routes serve a generic record, a
+  // transaction (whose permission name and table are resolved through the
+  // same meta.getMeta a caller already used to know what "invoice" means)
+  // and a custom record type, with no per-type wiring anywhere else.
+  const attachmentBodyLimit = Math.ceil(attachments.MAX_SIZE * 1.4); // base64 overhead
+
+  r.get(`${P}/attachments`, async (ctx) => {
+    const { record_type, record_id } = ctx.query;
+    if (!record_type || !record_id) throw badRequest('record_type and record_id are both required');
+    requirePerm(ctx, record_type, LEVEL.VIEW);
+    return { rows: attachments.list(ctx.repo, ctx.access, record_type, record_id) };
+  });
+
+  r.post(`${P}/attachments`, async (ctx) => {
+    const { record_type, record_id, filename, content_type, data } = ctx.body || {};
+    if (!record_type || !record_id) throw badRequest('record_type and record_id are both required');
+    requirePerm(ctx, record_type, LEVEL.EDIT);
+    if (typeof data !== 'string') throw badRequest('`data` must be base64-encoded file contents');
+    let bytes;
+    try { bytes = Buffer.from(data, 'base64'); }
+    catch { throw badRequest('`data` must be base64-encoded file contents'); }
+    return attachments.create(ctx.repo, ctx.access, { record_type, record_id, filename, content_type, bytes });
+  }, { bodyLimit: attachmentBodyLimit, created: true });
+
+  r.get(`${P}/attachments/:id`, async (ctx) => {
+    const row = attachments.get(ctx.repo, ctx.access, ctx.params.id);
+    requirePerm(ctx, row.record_type, LEVEL.VIEW);
+    return {
+      __body: Buffer.isBuffer(row.bytes) ? row.bytes : Buffer.from(row.bytes.buffer, row.bytes.byteOffset, row.bytes.byteLength),
+      __contentType: row.content_type,
+      __filename: row.filename,
+      __inline: bool(ctx.query.inline),
+    };
+  });
+
+  r.delete(`${P}/attachments/:id`, async (ctx) => {
+    const row = ctx.repo.get('attachment', ctx.params.id);
+    if (!row) throw notFound('Attachment not found');
+    requirePerm(ctx, row.record_type, LEVEL.EDIT);
+    return attachments.remove(ctx.repo, ctx.access, ctx.params.id);
   });
 
   /**

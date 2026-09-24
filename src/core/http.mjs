@@ -194,6 +194,23 @@ export function parseQuery(searchParams) {
   return out;
 }
 
+/**
+ * A `Content-Disposition` value safe to put straight into a header. A
+ * user-chosen filename (an uploaded attachment, an export the caller named)
+ * is neither ASCII-only nor free of quote/CR/LF by construction, and none
+ * of that was ever sanitised on the way into this header before -- a `"`
+ * broke the quoting, and a newline made Node throw, turning an ordinary
+ * download into a 500. The bare `filename=` stays a plain-ASCII fallback for
+ * old clients; `filename*=` (RFC 5987) carries the real name for everyone
+ * else.
+ */
+export function contentDisposition(filename, { inline = false } = {}) {
+  const safe = String(filename || 'download').replace(/[\r\n"]/g, '_');
+  const ascii = safe.replace(/[^\x20-\x7E]/g, '_');
+  const encoded = encodeURIComponent(safe).replace(/['()]/g, (c) => `%${c.charCodeAt(0).toString(16)}`);
+  return `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
 // ------------------------------------------------------------- responses
 export function send(res, status, body, headers = {}) {
   if (res.writableEnded) return;

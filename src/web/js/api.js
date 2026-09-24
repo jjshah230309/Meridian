@@ -184,6 +184,12 @@ export const API = {
   company: () => get('/api/v1/setup/company'),
   integrationEvents: () => get('/api/v1/setup/integration-events'),
   retryIntegrationEvent: (id) => post(`/api/v1/setup/integration-events/${id}/retry`, {}),
+  // ---- attachments
+  listAttachments: (record_type, record_id) => get('/api/v1/attachments', { record_type, record_id }),
+  uploadAttachment: (record_type, record_id, filename, content_type, data) =>
+    post('/api/v1/attachments', { record_type, record_id, filename, content_type, data }),
+  deleteAttachment: (id) => del(`/api/v1/attachments/${id}`),
+  downloadAttachment: (id) => download(`/api/v1/attachments/${id}`),
   // ---- projects, production, warehouse and field service
   projectPortfolio: (status) => get('/api/v1/projects/portfolio', status ? { status } : undefined),
   projectUtilisation: (params) => get('/api/v1/projects/utilisation', params),

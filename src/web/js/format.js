@@ -59,6 +59,15 @@ export function qty(q, dp = 2) {
 
 export const pct = (v, dp = 1) => (v === null || v === undefined ? '—' : `${Number(v).toFixed(dp)}%`);
 
+export function fileSize(bytes) {
+  if (bytes === null || bytes === undefined) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let n = bytes / 1024, i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
+}
+
 export function date(d) {
   if (!d) return '—';
   const s = String(d).slice(0, 10);

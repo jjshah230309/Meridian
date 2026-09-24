@@ -69,6 +69,7 @@ export const TENANT_TABLES = new Set([
   'asset_revaluation', 'asset_transfer',
   'accounting_book', 'book_adjustment', 'book_adjustment_line', 'book_balance',
   'asset_book_rule',
+  'attachment',
 ]);
 
 /**
@@ -206,6 +207,14 @@ function decodeRow(row) {
 function encodeValue(col, v) {
   if (v === undefined) return null;
   if (v === null) return null;
+  // A BLOB column's value is binary, not a JSON-able object -- Buffer and
+  // Uint8Array both pass straight through to the driver, which binds them
+  // as a real BLOB. Without this, `typeof v === 'object'` below would
+  // silently turn attachment bytes (or any future binary column) into the
+  // text `{"type":"Buffer","data":[...]}`, which a STRICT BLOB column then
+  // rejects outright rather than storing corrupted -- but only because it
+  // happens to be STRICT; nothing before this guarded against it.
+  if (Buffer.isBuffer(v) || v instanceof Uint8Array) return v;
   if (JSON_COLUMNS.has(col) && typeof v === 'object') return JSON.stringify(v);
   if (typeof v === 'boolean') return v ? 1 : 0;
   if (typeof v === 'object') return JSON.stringify(v);

@@ -8,11 +8,23 @@ import { API } from '../api.js';
 import * as fmt from '../format.js';
 import * as store from '../store.js';
 import { fieldControl, empty, toast, notifyError, confirm, modal, statusTag, facts, formatAddress, loading } from '../ui.js';
+import { attachmentsCard } from '../attachments.js';
 
+// Kept in sync with src/modules/meta.mjs's TXN_RECORDS by hand -- the
+// frontend has no way to import that module directly. This used to list
+// only 9 of the 17 document types; a type left out fell back to 'invoice'
+// below (permType), which checked and displayed the wrong permission for
+// every payment, deposit, requisition, return and transfer document viewed
+// at /txn/:id -- the Edit button's visibility, the "unapply" action's
+// visibility, and the breadcrumb's link all used invoice's permission
+// level instead of the document's own.
 const TYPE_FOR_ROUTE = {
   quote: 'QUOTE', sales_order: 'SALES_ORDER', invoice: 'INVOICE', credit_memo: 'CREDIT_MEMO',
-  purchase_order: 'PURCHASE_ORDER', vendor_bill: 'VENDOR_BILL', item_receipt: 'ITEM_RECEIPT',
-  fulfillment: 'FULFILLMENT', inventory_adjustment: 'INVENTORY_ADJUSTMENT',
+  customer_payment: 'CUSTOMER_PAYMENT', purchase_order: 'PURCHASE_ORDER', item_receipt: 'ITEM_RECEIPT',
+  vendor_bill: 'VENDOR_BILL', vendor_payment: 'VENDOR_PAYMENT', fulfillment: 'FULFILLMENT',
+  inventory_adjustment: 'INVENTORY_ADJUSTMENT', inventory_transfer: 'INVENTORY_TRANSFER',
+  requisition: 'REQUISITION', return_auth: 'RETURN_AUTH', vendor_return: 'VENDOR_RETURN',
+  customer_deposit: 'CUSTOMER_DEPOSIT', vendor_prepayment: 'VENDOR_PREPAYMENT',
 };
 const ROUTE_FOR_TYPE = Object.fromEntries(Object.entries(TYPE_FOR_ROUTE).map(([k, v]) => [v, k]));
 
@@ -181,7 +193,8 @@ export async function txnView(route, { go }) {
             ['Last updated', fmt.dateTime(t.updated_at)],
             t.approved_at ? ['Approved', fmt.dateTime(t.approved_at)] : null,
             ['Posted', t.posted ? h('span.tag.green', 'Yes') : h('span.tag', 'No')],
-          ].filter(Boolean)))))));
+          ].filter(Boolean))),
+        attachmentsCard(permType, t.id, { canEdit: store.can(permType, store.LEVEL.EDIT) })))));
 }
 
 const detail = (label, value) => value === null || value === undefined || value === false

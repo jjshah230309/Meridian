@@ -335,6 +335,22 @@ test('nothing in an inline style asks for a weight that is not bundled either', 
   assert.deepEqual(offenders, [], `inline weights used but not bundled (bundled: ${[...have].sort().join(', ')})`);
 });
 
+test('txn.js\'s TYPE_FOR_ROUTE lists every document type meta.mjs knows about', async () => {
+  // txn.js can't import src/modules/meta.mjs (browser vs. Node module), so
+  // it keeps its own hand-written copy of the record-type -> TYPE_CONSTANT
+  // mapping -- and that copy used to list only 9 of 17 types. A type left
+  // out falls back to 'invoice' at the call site (permType), which then
+  // checks and displays the WRONG permission for that document: the Edit
+  // button's visibility, an action's visibility, and the breadcrumb link.
+  const { TXN_RECORDS } = await import('../src/modules/meta.mjs');
+  const src = read(WEB, 'js', 'views', 'txn.js');
+  const block = /const TYPE_FOR_ROUTE = \{([^}]*)\}/.exec(src)?.[1];
+  assert.ok(block, 'TYPE_FOR_ROUTE not found in txn.js -- has it been renamed?');
+  const found = Object.fromEntries(
+    [...block.matchAll(/(\w+):\s*'([A-Z_]+)'/g)].map((m) => [m[1], m[2]]));
+  assert.deepEqual(found, TXN_RECORDS, 'txn.js\'s TYPE_FOR_ROUTE has drifted from meta.mjs\'s TXN_RECORDS');
+});
+
 test('the palette and typeface lists agree with the stylesheet', async () => {
   const { PALETTES, TYPEFACES } = await import('../src/web/js/store.js');
   const css = CSS();

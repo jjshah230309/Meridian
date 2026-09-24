@@ -396,3 +396,30 @@ export const section = (title, actions, ...body) => h('div.card',
   h('div.card-body', ...body));
 
 export { safeSnippet };
+
+// --------------------------------------------------------------- files
+/** A file's contents as base64, without the data: URL prefix FileReader adds. */
+export function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',', 2)[1] || '');
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** A hidden file input driving a picker button, so the button itself can be
+ * styled and placed like any other -- click it to trigger this. */
+export const filePicker = (accept, onPick, { multiple = false } = {}) => {
+  const input = h('input', {
+    type: 'file', accept, multiple, style: { display: 'none' },
+    onchange: async () => {
+      const files = [...(input.files || [])];
+      if (!files.length) return;
+      try { await onPick(files); }
+      catch (e) { notifyError(e); }
+      finally { input.value = ''; }     // let the same file(s) be picked twice
+    },
+  });
+  return input;
+};
