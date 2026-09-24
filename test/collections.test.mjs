@@ -412,6 +412,32 @@ test('over_limit compares the credit limit in the same currency as the balance i
   assert.equal(w.rows[0].over_limit, false, '£2,000 against a £2,200 limit is under, not over');
 });
 
+test('a customer whose own currency has no exchange rate does not take the whole worklist down', () => {
+  // A customer's currency is set for quoting purposes and need not match
+  // anything they have actually been invoiced in -- so, unlike an open
+  // document's own currency (which had to clear this same lookup to post at
+  // all), there is no guarantee a rate to the reporting currency exists. One
+  // customer's missing FX setup must not crash the worklist for every
+  // customer on it.
+  const f = freshTenant();
+  // No JPY -> USD rate is ever inserted.
+  const customer = f.tx(() => entities.createCustomer(f.repo, {
+    name: 'Yen Co', subsidiary_id: f.subsidiaryId, currency: 'JPY', credit_limit: 500000,
+  }));
+  f.tx(() => txnMod.createTxn(f.repo, 'INVOICE', {
+    // Invoiced in USD (the reporting currency), so the invoice itself never
+    // needs a JPY rate to post -- only the credit_limit comparison does.
+    entity_id: customer.id, subsidiary_id: f.subsidiaryId, currency: 'USD',
+    txn_date: addDays(NOW, -60), due_date: addDays(NOW, -45),
+    lines: [{ account_id: acct(f, '4020').id, quantity: 1, unit_price: 2000 }],
+  }));
+
+  const w = collections.worklist(f.repo, { as_of: NOW });
+  assert.equal(w.rows.length, 1);
+  assert.equal(w.rows[0].over_limit, false, 'an unknown rate must not be reported as over the limit');
+  assert.equal(w.rows[0].over_limit_unknown, true, 'the row should say the limit could not be checked');
+});
+
 test('a letter lists what it is chasing, and the items add up to the figure in it', () => {
   const f = freshTenant();
   const { customer } = lateInvoice(f, { name: 'Mixed Ltd', daysLate: 45, amount: 5000 });

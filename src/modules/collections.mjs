@@ -95,6 +95,21 @@ export function worklist(repo, { as_of = today(), collector_id = null, subsidiar
   if (!isValidDate(as_of)) throw new ValidationError({ as_of: 'Enter a valid date' });
   const reporting = reportingCurrency(repo);
   const rateTo = converter(repo, reporting, as_of);
+  // A customer's credit_limit is in their own currency, and that currency
+  // need not be one anything has ever actually been invoiced in -- so
+  // unlike an open document's own currency (which had to clear this same
+  // lookup to post at all), there is no guarantee a rate exists. A missing
+  // one must not take the whole worklist down with it; the comparison is
+  // just left out for that customer and said so by name.
+  const creditLimitRates = new Map([[reporting, 1]]);
+  const creditLimitRateMissing = new Set();
+  const creditLimitRateTo = (from) => {
+    if (!creditLimitRates.has(from)) {
+      try { creditLimitRates.set(from, rateTo(from)); }
+      catch { creditLimitRates.set(from, null); creditLimitRateMissing.add(from); }
+    }
+    return creditLimitRates.get(from);
+  };
   const items = openItems(repo, { as_of, subsidiary_id, currency: reporting });
   const byCustomer = new Map();
   for (const i of items) {
@@ -128,6 +143,12 @@ export function worklist(repo, { as_of = today(), collector_id = null, subsidiar
     if (total <= 0) continue;
 
     const notice = lastNotices.get(c.id);
+    // Over the limit is a different conversation from merely late. `total`
+    // is already in the reporting currency (openItems converted it); the
+    // customer's own credit_limit is stored in their currency, so it needs
+    // the same conversion before the two are comparable -- and that rate
+    // may simply not exist yet, so this stays a maybe, not a crash.
+    const limitRate = c.credit_limit > 0 ? creditLimitRateTo(c.currency) : 1;
     rows.push({
       customer_id: c.id, entity_no: c.entity_no, name: c.name, email: c.email, phone: c.phone,
       currency: c.currency, terms: c.terms, credit_limit: c.credit_limit, credit_hold: !!c.credit_hold,
@@ -141,11 +162,8 @@ export function worklist(repo, { as_of = today(), collector_id = null, subsidiar
       last_notice_level: notice?.level_no || 0,
       documents: own.length, oldest_days: oldest,
       buckets, total, overdue,
-      // Over the limit is a different conversation from merely late. `total`
-      // is already in the reporting currency (openItems converted it); the
-      // customer's own credit_limit is stored in their currency, so it needs
-      // the same conversion before the two are comparable.
-      over_limit: c.credit_limit > 0 && total > Money.convert(c.credit_limit, rateTo(c.currency)),
+      over_limit: c.credit_limit > 0 && limitRate !== null && total > Money.convert(c.credit_limit, limitRate),
+      over_limit_unknown: c.credit_limit > 0 && limitRate === null,
     });
   }
 

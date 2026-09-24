@@ -1062,6 +1062,8 @@ fieldset { border: 0; margin: 0; padding: 0; }
 .stack { display: flex; flex-direction: column; gap: var(--s3); }
 .row { display: flex; gap: var(--s3); align-items: center; }
 .row.wrap { flex-wrap: wrap; }
+.row-tight { display: flex; gap: var(--s2); align-items: center; }
+.row-tight.wrap { flex-wrap: wrap; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s6); align-items: start; }
 @media (max-width: 940px) { .two-col { grid-template-columns: 1fr; } }
 dl.facts { display: grid; grid-template-columns: auto 1fr; gap: 8px var(--s6); margin: 0; font-size: 13px; align-items: baseline; }

@@ -144,12 +144,17 @@ want to spend eight hours in. Everything here is stored per person on this
 computer, so two people sharing a machine get their own, and none of it
 touches your company's data.
 
-**Colour scheme** — five of them, and they are complete palettes rather than
+**Look** comes first: **Glass**, a softer, translucent shape with springy
+motion (the default), or **Dock**, a flatter, darker instrument-panel style
+with pill controls. Colour and typeface below apply to either.
+
+**Colour scheme** — six of them, and they are complete palettes rather than
 tints:
 
 | | |
 | --- | --- |
-| **Carbon & Cobalt** | Cool graphite chrome, vivid cobalt accent. The default. |
+| **Obsidian & Indigo** | Midnight chrome, electric indigo accent. The default. |
+| **Carbon & Cobalt** | Cool graphite chrome, vivid cobalt accent. |
 | **Ink & Brass** | Warm paper, near-black chrome, brass. |
 | **Graphite & Green** | Warm stone with a forest green. |
 | **Slate & Teal** | Cool slate with a deep teal. |
@@ -159,7 +164,7 @@ Each has its own light and dark version, so the colour scheme and the
 **theme** below it are separate choices — the green palette in dark mode is a
 thing you can have.
 
-In all five, the sidebar and top bar are dark and the page is not. That is
+In all six, the sidebar and top bar are dark and the page is not. That is
 deliberate: it stops the navigation competing with the numbers for your
 attention, and it is most of why the application reads as an instrument
 rather than a web page.

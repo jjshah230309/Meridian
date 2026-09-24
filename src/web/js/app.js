@@ -630,7 +630,7 @@ function showNotifications() {
       ? h('div.timeline', ...rows.map((n) => h('div.tl-item',
         h('div.tl-dot', { style: { background: n.severity === 'error' ? 'var(--neg)' : n.severity === 'warning' ? 'var(--warn)' : 'var(--accent)', opacity: n.read_at ? 0.35 : 1 } }),
         h('div.tl-body',
-          h('div', { style: { fontWeight: n.read_at ? 400 : 620 } }, n.title),
+          h('div', { style: { fontWeight: n.read_at ? 400 : 600 } }, n.title),
           n.body && h('div.muted', n.body),
           h('div.tl-when', fmt.relative(n.created_at))))))
       : empty('Nothing new', 'Notifications from workflows and approvals appear here.', null, 'bell'),

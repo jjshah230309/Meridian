@@ -307,6 +307,13 @@ test('nothing in an inline style asks for a weight that is not bundled either', 
   // `style: { fontWeight: 550 }` and friends, written straight into a view's
   // `h()` call rather than through a stylesheet rule. Same failure mode --
   // fake bold at 13px -- just invisible to a test that only reads app.css.
+  //
+  // A plain `fontWeight:\s*(\d+)` also missed a conditional value --
+  // `fontWeight: n.read_at ? 400 : 620` -- since the digits do not
+  // immediately follow the colon. Capturing everything up to the next `,`
+  // or `}` (the whole value expression, not just its first token) and
+  // pulling every number out of that catches a weight hiding in either
+  // branch of a ternary, not only a bare literal.
   const fontCss = read(WEB, 'fonts', 'fonts.css');
   const have = new Set([...fontCss.matchAll(/font-weight:\s*(\d+)/g)].map((m) => Number(m[1])));
   const offenders = [];
@@ -316,9 +323,11 @@ test('nothing in an inline style asks for a weight that is not bundled either', 
       if (entry.isDirectory()) { walk(full); continue; }
       if (!entry.name.endsWith('.js')) continue;
       const src = fs.readFileSync(full, 'utf8');
-      for (const m of src.matchAll(/fontWeight:\s*['"]?(\d+)/g)) {
-        const w = Number(m[1]);
-        if (!have.has(w)) offenders.push(`${path.relative(WEB, full)}: fontWeight ${w}`);
+      for (const m of src.matchAll(/fontWeight:\s*([^,}]+)/g)) {
+        for (const wm of m[1].matchAll(/\d+/g)) {
+          const w = Number(wm[0]);
+          if (!have.has(w)) offenders.push(`${path.relative(WEB, full)}: fontWeight ${w}`);
+        }
       }
     }
   };
