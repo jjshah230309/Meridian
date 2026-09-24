@@ -342,6 +342,32 @@ export function remittancePdf(repo, id, vendorId) {
   });
 }
 
+/** Queue this supplier's remittance advice to be emailed. Never sent
+ * inline -- see collections.emailStatement's note on the same rule. */
+export function emailRemittance(repo, id, vendorId) {
+  const run = getRun(repo, id);
+  const group = run.vendors.find((g) => g.vendor_id === vendorId);
+  if (!group) throw notFound('That supplier is not on this run');
+  if (!group.remittance_email) throw unprocessable(`${group.vendor_name} has no remittance email address on file.`);
+  const pdf = remittancePdf(repo, id, vendorId);
+  const queueId = ulid();
+  repo.tx(() => {
+    repo.insert('integration_event', {
+      id: queueId, channel: 'email', event_type: 'payruns.remittance.email',
+      record_type: 'payment_run', record_id: id,
+      payload: {
+        to: group.remittance_email, subject: `Remittance advice — ${run.run_no}`,
+        text: `Please find attached remittance advice for the payment made on ${run.payment_date}.`,
+        attachment: { filename: `remittance-${run.run_no}-${group.vendor_no || vendorId}.pdf`, content_type: 'application/pdf', bytes_base64: pdf.toString('base64') },
+      },
+      status: 'pending', attempts: 0, last_error: '', target_url: '', created_at: nowIso(),
+    });
+    audit.record(repo, { recordType: 'payment_run', recordId: id, action: 'email-remittance',
+      changes: { remittance: { from: null, to: group.remittance_email } } });
+  });
+  return { queued: true, id: queueId, to: group.remittance_email };
+}
+
 /**
  * A payment file for the bank, as CSV.
  *

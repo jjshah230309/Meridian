@@ -85,21 +85,73 @@ async function expect(reader, codes, context, timeoutMs) {
  * truncates the message right there. */
 const dotStuff = (body) => body.split(CRLF).map((line) => (line.startsWith('.') ? '.' + line : line)).join(CRLF);
 
+const isAscii = (s) => /^[\x00-\x7F]*$/.test(s);
+
+/** RFC 2047 encoded-word, for a header value (a Subject, a From display
+ * name) that isn't plain ASCII -- an em dash or an accented name is
+ * ordinary in this application's own text, but sent raw as a header value
+ * it depends on the connection having negotiated 8BITMIME/SMTPUTF8, which
+ * this client never checks for. Left un-encoded, a compliant receiver may
+ * reject it outright; a lenient one decodes the UTF-8 bytes as Latin-1 and
+ * silently mangles it -- which is exactly what an unencoded em dash in a
+ * Subject line turns into. Encoding sidesteps needing to negotiate either
+ * extension at all. Chunking into multiple encoded-words past RFC 2047's
+ * 75-character limit is not implemented -- every header value here (a
+ * subject, a display name) is short enough in practice that it never
+ * matters, and a too-long line degrades to a long header rather than a
+ * wrong one. */
+const encodeHeaderValue = (s) => (isAscii(s) ? s : `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=`);
+
+/** Same as encodeHeaderValue, but for a "Display Name <addr>" From header:
+ * only the display name can be non-ASCII (the address portion is what the
+ * server actually routes on), so only it gets encoded -- encoding the
+ * whole string would swallow the angle-bracket address into the encoded
+ * word along with the name. */
+function encodeFromHeader(from) {
+  const m = /^(.*)<(.+)>\s*$/.exec(from);
+  if (!m) return encodeHeaderValue(from);
+  const name = m[1].trim();
+  return isAscii(name) ? from : `${encodeHeaderValue(name)} <${m[2]}>`;
+}
+
+/** Quoted-printable, RFC 2045: every byte kept 7-bit-clean, non-ASCII bytes
+ * escaped as =XX, lines soft-wrapped under 76 columns. Used for the body
+ * only when it actually contains non-ASCII bytes -- plain ASCII text is
+ * left exactly as written, since encoding it would only make a support
+ * request's "what did the email actually say" harder to answer by eye. */
+function quotedPrintable(text) {
+  const bytes = Buffer.from(text.replace(/\r\n/g, '\n'), 'utf8');
+  let out = '', lineLen = 0;
+  const put = (piece) => {
+    if (lineLen + piece.length > 75) { out += '=' + CRLF; lineLen = 0; }
+    out += piece; lineLen += piece.length;
+  };
+  for (const b of bytes) {
+    if (b === 0x0A) { out += CRLF; lineLen = 0; continue; }
+    if ((b >= 0x21 && b <= 0x7E && b !== 0x3D) || b === 0x20 || b === 0x09) put(String.fromCharCode(b));
+    else put('=' + b.toString(16).toUpperCase().padStart(2, '0'));
+  }
+  return out;
+}
+
 function buildMessage({ from, to, subject, text, attachments = [] }) {
   const boundary = `meridian-${crypto.randomBytes(12).toString('hex')}`;
   const headers = [
-    `From: ${from}`, `To: ${to}`, `Subject: ${subject}`,
+    `From: ${encodeFromHeader(from)}`, `To: ${to}`, `Subject: ${encodeHeaderValue(subject)}`,
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: <${crypto.randomBytes(16).toString('hex')}@meridian.local>`,
     'MIME-Version: 1.0',
   ];
+  const bodyAscii = isAscii(text);
+  const body = bodyAscii ? text : quotedPrintable(text);
+  const bodyEncoding = bodyAscii ? '7bit' : 'quoted-printable';
   if (!attachments.length) {
-    headers.push('Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit');
-    return dotStuff(headers.join(CRLF) + CRLF + CRLF + text);
+    headers.push('Content-Type: text/plain; charset=utf-8', `Content-Transfer-Encoding: ${bodyEncoding}`);
+    return dotStuff(headers.join(CRLF) + CRLF + CRLF + body);
   }
   headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
   const parts = [
-    `--${boundary}`, 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit', '', text, '',
+    `--${boundary}`, 'Content-Type: text/plain; charset=utf-8', `Content-Transfer-Encoding: ${bodyEncoding}`, '', body, '',
   ];
   for (const a of attachments) {
     parts.push(

@@ -1,12 +1,14 @@
 // Meridian ERP :: modules/setup
 // Tenant provisioning: chart of accounts, roles, periods, currencies,
 // subsidiaries, price levels and the owner account. Idempotent per tenant.
-import { ulid, nowIso, today } from '../core/util.mjs';
-import { hashPassword, passwordProblems } from '../core/auth.mjs';
+import { ulid, nowIso, today, safeJson } from '../core/util.mjs';
+import { hashPassword, passwordProblems, encryptSecret, decryptSecret } from '../core/auth.mjs';
 import { Repo } from '../core/db.mjs';
 import { ROLE_TEMPLATES, LEVEL } from '../core/rbac.mjs';
 import { ValidationError, conflict } from '../core/http.mjs';
 import * as gl from './gl.mjs';
+
+const SMTP_KEY = 'meridian:smtp';
 
 /**
  * A US-GAAP-shaped default chart of accounts.
@@ -308,4 +310,68 @@ export function postingAccounts(repo) {
   const out = {};
   for (const [k, num] of Object.entries(POSTING_ACCOUNTS)) out[k] = byNumber[num] || null;
   return out;
+}
+
+// --------------------------------------------------------------- email
+// Kept on the tenant's own `settings` JSON column (migration 001).
+// `tenant` is deliberately not in db.mjs's TENANT_TABLES -- every other
+// table is one tenant's data, but the tenant row is the one row that
+// *names* the tenant -- so this goes through repo.exec with an explicit
+// `:t` rather than repo.update, the same pattern gl.mjs's exchange-rate
+// upsert and tax.mjs's return lookups already use for this table.
+
+/** Never returns the password itself, encrypted or not -- only whether
+ * one is configured, the same "shown once, never redisplayed" precedent
+ * API tokens already set. */
+export function getEmailSettings(repo) {
+  const row = repo.queryOne('SELECT settings FROM tenant WHERE id = :t');
+  const smtp = safeJson(row?.settings, {}).smtp || {};
+  return {
+    host: smtp.host || '', port: smtp.port || 587, secure: !!smtp.secure,
+    username: smtp.username || '', has_password: !!smtp.password_enc,
+    from_address: smtp.from_address || '', from_name: smtp.from_name || '',
+  };
+}
+
+/** The decrypted form, for the outbox drainer only -- never sent over
+ * the API. `config.secret` is the same server secret.key that derives
+ * the CSRF HMAC key. */
+export function resolveEmailSettings(repo, config) {
+  const row = repo.queryOne('SELECT settings FROM tenant WHERE id = :t');
+  const smtp = safeJson(row?.settings, {}).smtp || {};
+  if (!smtp.host) return null;
+  return {
+    host: smtp.host, port: smtp.port || 587, secure: !!smtp.secure,
+    username: smtp.username || '',
+    password: smtp.password_enc ? decryptSecretSafe(config.secret, smtp.password_enc) : '',
+    from: smtp.from_name ? `${smtp.from_name} <${smtp.from_address || smtp.username}>` : (smtp.from_address || smtp.username),
+  };
+}
+// Isolated so a corrupt or foreign-secret-encrypted value (the data
+// directory copied onto a machine with a different secret.key, say)
+// surfaces as "email is not configured" rather than crashing the drain.
+function decryptSecretSafe(secret, encoded) {
+  try { return decryptSecret(secret, encoded, SMTP_KEY); }
+  catch { return ''; }
+}
+
+export function setEmailSettings(repo, config, patch = {}) {
+  const row = repo.queryOne('SELECT settings FROM tenant WHERE id = :t');
+  const settings = safeJson(row?.settings, {});
+  const existing = settings.smtp || {};
+  const smtp = {
+    host: patch.host !== undefined ? String(patch.host || '').trim() : (existing.host || ''),
+    port: patch.port !== undefined ? Number(patch.port) || 587 : (existing.port || 587),
+    secure: patch.secure !== undefined ? !!patch.secure : !!existing.secure,
+    username: patch.username !== undefined ? String(patch.username || '').trim() : (existing.username || ''),
+    from_address: patch.from_address !== undefined ? String(patch.from_address || '').trim() : (existing.from_address || ''),
+    from_name: patch.from_name !== undefined ? String(patch.from_name || '').trim() : (existing.from_name || ''),
+    // An empty password field can't be told apart from "didn't touch this"
+    // in a form that never shows the password back, so clearing one is a
+    // separate, explicit action rather than inferred from an empty string.
+    password_enc: patch.clear_password ? null
+      : (patch.password ? encryptSecret(config.secret, patch.password, SMTP_KEY) : (existing.password_enc || null)),
+  };
+  repo.exec('UPDATE tenant SET settings = ? WHERE id = :t', [JSON.stringify({ ...settings, smtp })]);
+  return getEmailSettings(repo);
 }

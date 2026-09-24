@@ -363,6 +363,36 @@ export function statementPdf(repo, customerId, opts = {}) {
   });
 }
 
+/** Queue this statement to be emailed to the customer's address on file.
+ * Never sent inline -- the same "queued, never called inline" rule the
+ * outbox itself is built on (platform.mjs's webhook action states it
+ * outright: the ledger must not wait on the network) -- so this returns
+ * as soon as the row is written, not once delivery actually happens. */
+export function emailStatement(repo, customerId, opts = {}) {
+  const s = statement(repo, customerId, opts);
+  if (!s.customer.email) throw unprocessable(`${s.customer.name} has no email address on file.`);
+  const pdf = statementPdf(repo, customerId, opts);
+  const id = ulid();
+  repo.tx(() => {
+    repo.insert('integration_event', {
+      id, channel: 'email', event_type: 'collections.statement.email',
+      record_type: 'customer', record_id: customerId,
+      payload: {
+        to: s.customer.email, subject: `Statement of account — ${s.company}`,
+        text: `Please find attached your statement of account as at ${s.as_of}.`,
+        attachment: {
+          filename: `statement-${s.customer.entity_no || customerId}.pdf`,
+          content_type: 'application/pdf', bytes_base64: pdf.toString('base64'),
+        },
+      },
+      status: 'pending', attempts: 0, last_error: '', target_url: '', created_at: nowIso(),
+    });
+    audit.record(repo, { recordType: 'customer', recordId: customerId, action: 'email-statement',
+      changes: { statement: { from: null, to: s.customer.email } } });
+  });
+  return { queued: true, id, to: s.customer.email };
+}
+
 // -------------------------------------------------------------- dunning
 export const policies = (repo) => repo.query(
   `SELECT p.*, (SELECT COUNT(*) FROM dunning_level l WHERE l.tenant_id = p.tenant_id AND l.policy_id = p.id) AS levels
@@ -640,6 +670,31 @@ export function noticePdf(repo, id) {
       },
     ],
   });
+}
+
+/** Queue an already-issued notice to be emailed. See emailStatement's note
+ * above on why this only queues rather than sending inline. */
+export function emailNotice(repo, id) {
+  const n = getNotice(repo, id);
+  if (n.status === 'cancelled') throw unprocessable(`${n.notice_no} was withdrawn and cannot be sent.`);
+  if (!n.customer?.email) throw unprocessable(`${n.customer?.name || 'This customer'} has no email address on file.`);
+  const pdf = noticePdf(repo, id);
+  const queueId = ulid();
+  repo.tx(() => {
+    repo.insert('integration_event', {
+      id: queueId, channel: 'email', event_type: 'collections.notice.email',
+      record_type: 'dunning_notice', record_id: id,
+      payload: {
+        to: n.customer.email, subject: n.subject,
+        text: n.body,
+        attachment: { filename: `${n.notice_no}.pdf`, content_type: 'application/pdf', bytes_base64: pdf.toString('base64') },
+      },
+      status: 'pending', attempts: 0, last_error: '', target_url: '', created_at: nowIso(),
+    });
+    audit.record(repo, { recordType: 'dunning_notice', recordId: id, action: 'email',
+      changes: { notice: { from: null, to: n.customer.email } } });
+  });
+  return { queued: true, id: queueId, to: n.customer.email };
 }
 
 // ------------------------------------------------------- collector state

@@ -17,10 +17,12 @@ import * as httpx from './core/http.mjs';
 import * as auth from './core/auth.mjs';
 import * as rbac from './core/rbac.mjs';
 import * as outbox from './core/outbox.mjs';
+import * as smtp from './core/smtp.mjs';
 import { nowIso } from './core/util.mjs';
 import { buildApi } from './api.mjs';
 import * as appconfig from './core/appconfig.mjs';
 import * as desktop from './core/desktop.mjs';
+import * as setup from './modules/setup.mjs';
 import { logger } from './core/logger.mjs';
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
@@ -407,12 +409,27 @@ async function main() {
   }, 3600_000);
   housekeeping.unref();
 
-  // Drain the outbox: a webhook a workflow queued, or an email a statement
-  // or dunning notice queued (core/smtp.mjs, once configured). Every 30s
-  // rather than hourly, since a webhook waiting on this is closer to "the
-  // record just changed" than "once a day is fine".
+  // Drain the outbox: a webhook a workflow queued, or an email a statement,
+  // dunning notice or remittance advice queued. Every 30s rather than
+  // hourly, since a webhook waiting on this is closer to "the record just
+  // changed" than "once a day is fine".
+  //
+  // The payload shape every email-channel row carries: { to, subject, text,
+  // attachment: { filename, content_type, bytes_base64 } | null }. One
+  // attachment, because every caller of this (collections.mjs's statements
+  // and dunning notices, payruns.mjs's remittance advice) is one PDF plus a
+  // short note, never a multi-file mailing.
+  const sendQueuedEmail = async (queueDb, tenantId, payload) => {
+    const repo = new Repo(queueDb, tenantId);
+    const settings = setup.resolveEmailSettings(repo, config);
+    if (!settings) throw new Error('Email is not configured for this company');
+    const attachments = payload.attachment
+      ? [{ filename: payload.attachment.filename, contentType: payload.attachment.content_type, bytes: Buffer.from(payload.attachment.bytes_base64, 'base64') }]
+      : [];
+    await smtp.sendMail(settings, { from: settings.from, to: payload.to, subject: payload.subject, text: payload.text, attachments });
+  };
   const draining = setInterval(() => {
-    outbox.drainOnce(db, { secret: config.secret, sendMail: config.sendMail || null })
+    outbox.drainOnce(db, { secret: config.secret, sendMail: sendQueuedEmail })
       .catch((e) => logger.error('outbox drain:', e));
   }, 30_000);
   draining.unref();

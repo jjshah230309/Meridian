@@ -105,7 +105,10 @@ it tells you which and why before it sends anything.
 
 Each letter is produced as a PDF in the customer's own currency, listing the
 overdue items so the total in the sentence matches the total in the table.
-Nothing is emailed — the letters are produced and recorded for you to send.
+Nothing is emailed automatically — a letter is produced and recorded, and
+**Email** on the notice sends it to the customer's address on file once
+outgoing email is set up (Setup → Integrations), or you can send it yourself
+from the PDF.
 
 Policies are editable: **Dunning Policies** under Financial. Change the days,
 the wording, the minimum balance, or add rungs. The letter templates take

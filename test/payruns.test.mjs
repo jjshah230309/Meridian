@@ -255,6 +255,29 @@ test('the remittance advice lists what the payment settled', () => {
   assert.match(thrown(() => payruns.remittancePdf(f.repo, run.id, 'nobody')).message, /not on this run/);
 });
 
+test('emailing a remittance queues it in the outbox, and a supplier with no remittance address is refused', () => {
+  const f = freshTenant();
+  const acme = supplier(f, 'Acme Supplies', { bank_reference: 'GB29 ACME 0001', remittance_email: 'ap@acme.test' });
+  bill(f, acme, { amount: 1200 });
+  const run = f.tx(() => payruns.proposeRun(f.repo, { bank_account_id: bankAccount(f).id, payment_date: NOW }));
+  f.tx(() => payruns.commitRun(f.repo, run.id));
+
+  const result = f.tx(() => payruns.emailRemittance(f.repo, run.id, acme.id));
+  assert.equal(result.queued, true);
+  assert.equal(result.to, 'ap@acme.test');
+  const row = f.repo.get('integration_event', result.id);
+  assert.equal(row.channel, 'email');
+  assert.equal(row.payload.attachment.content_type, 'application/pdf');
+  const pdf = Buffer.from(row.payload.attachment.bytes_base64, 'base64');
+  assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+
+  const brick = supplier(f, 'Brick & Co'); // no remittance_email
+  bill(f, brick, { amount: 500 });
+  const run2 = f.tx(() => payruns.proposeRun(f.repo, { bank_account_id: bankAccount(f).id, payment_date: NOW }));
+  f.tx(() => payruns.commitRun(f.repo, run2.id));
+  assert.throws(() => f.tx(() => payruns.emailRemittance(f.repo, run2.id, brick.id)), /remittance email/);
+});
+
 test('the payment file has a row per supplier, not per bill', () => {
   const f = freshTenant();
   twoSuppliers(f);

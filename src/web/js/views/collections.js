@@ -209,7 +209,14 @@ export async function collectionsView(route, { go }) {
         form),
       footLeft: h('div.row', { style: { gap: '6px' } },
         h('button.btn.sm', { onclick: () => API.statementPdf(row.customer_id, { kind: 'open_item' }).catch(notifyError) }, 'Statement (open items)'),
-        h('button.btn.sm', { onclick: () => API.statementPdf(row.customer_id, { kind: 'activity' }).catch(notifyError) }, 'Statement (activity)')),
+        h('button.btn.sm', { onclick: () => API.statementPdf(row.customer_id, { kind: 'activity' }).catch(notifyError) }, 'Statement (activity)'),
+        row.email && h('button.btn.sm', {
+          title: `Email to ${row.email}`,
+          onclick: async () => {
+            try { await API.emailStatement(row.customer_id, { kind: 'open_item' }); notifyOk(`Queued to be sent to ${row.email}`); }
+            catch (e) { notifyError(e); }
+          },
+        }, 'Email statement')),
       actions: [
         { label: 'Close', value: null },
         { label: 'Open customer', onClick: (close) => { close(true); go(`/record/customer/${row.customer_id}`); } },
@@ -340,8 +347,14 @@ export async function collectionsView(route, { go }) {
             h('td.num', fmt.money(n.total_overdue, n.currency)),
             h('td.num', { class: daysTone(n.oldest_days) }, `${n.oldest_days}d`),
             h('td', statusTag(n.status)),
-            h('td', { onclick: (e) => e.stopPropagation() },
-              h('button.btn.sm', { onclick: () => API.noticePdf(n.id).catch(notifyError) }, 'PDF')))))))));
+            h('td.row', { onclick: (e) => e.stopPropagation(), style: { gap: '4px' } },
+              h('button.btn.sm', { onclick: () => API.noticePdf(n.id).catch(notifyError) }, 'PDF'),
+              n.status !== 'cancelled' && h('button.btn.sm', {
+                onclick: async () => {
+                  try { const r = await API.emailNotice(n.id); notifyOk(`Queued to be sent to ${r.to}`); }
+                  catch (e) { notifyError(e); }
+                },
+              }, 'Email')))))))));
   }
 
   async function noticeDialog(n) {
@@ -371,7 +384,14 @@ export async function collectionsView(route, { go }) {
                 h('td.num', `${d.days_overdue}d`),
                 h('td.num', fmt.money(d.outstanding, d.currency))))))))
           : null),
-      footLeft: h('button.btn.sm', { onclick: () => API.noticePdf(notice.id).catch(notifyError) }, 'Download PDF'),
+      footLeft: h('div.row', { style: { gap: '6px' } },
+        h('button.btn.sm', { onclick: () => API.noticePdf(notice.id).catch(notifyError) }, 'Download PDF'),
+        notice.status !== 'cancelled' && notice.customer?.email && h('button.btn.sm', {
+          onclick: async () => {
+            try { const r = await API.emailNotice(notice.id); notifyOk(`Queued to be sent to ${r.to}`); }
+            catch (e) { notifyError(e); }
+          },
+        }, 'Email')),
       actions: [
         { label: 'Close', value: null },
         store.can('dunning_notice', store.LEVEL.EDIT) && notice.status === 'issued'

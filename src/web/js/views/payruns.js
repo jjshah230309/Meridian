@@ -226,6 +226,15 @@ export async function payrunsView(route, { go }) {
             g.payment_no
               ? h('button.btn.sm', { onclick: () => API.remittancePdf(run.id, g.vendor_id).catch(notifyError) }, 'Remittance')
               : null,
+            g.payment_no && g.remittance_email
+              ? h('button.btn.sm', {
+                title: `Email to ${g.remittance_email}`,
+                onclick: async () => {
+                  try { const r = await API.emailRemittance(run.id, g.vendor_id); notifyOk(`Queued to be sent to ${r.to}`); }
+                  catch (e) { notifyError(e); }
+                },
+              }, 'Email')
+              : null,
             h('span', { style: { fontSize: '14px', fontWeight: 600 } }, fmt.money(g.total, g.currency)))),
         g.payment_hold
           ? h('div.callout.warn', { style: { margin: '0 12px 8px' } },

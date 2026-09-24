@@ -114,6 +114,33 @@ test('a statement renders to a PDF that is actually a PDF', () => {
   assert.ok(buf.includes(Buffer.from('%%EOF')));
 });
 
+test('emailing a statement queues it in the outbox rather than sending inline', () => {
+  const f = freshTenant();
+  const { customer } = lateInvoice(f);
+  const result = f.tx(() => collections.emailStatement(f.repo, customer.id, { as_of: NOW }));
+  assert.equal(result.queued, true);
+  assert.equal(result.to, 'ap@tardy.test');
+
+  const row = f.repo.get('integration_event', result.id);
+  assert.equal(row.channel, 'email');
+  assert.equal(row.status, 'pending', 'must be queued, not delivered -- outbox.mjs owns delivery');
+  assert.equal(row.payload.to, 'ap@tardy.test');
+  assert.equal(row.payload.attachment.content_type, 'application/pdf');
+  const pdf = Buffer.from(row.payload.attachment.bytes_base64, 'base64');
+  assert.equal(pdf.subarray(0, 5).toString(), '%PDF-', 'the queued attachment must be a real PDF');
+
+  const audit = f.repo.query(`SELECT * FROM audit_event WHERE tenant_id = :t AND record_type = 'customer' AND action = 'email-statement'`);
+  assert.equal(audit.length, 1);
+});
+
+test('emailing a statement for a customer with no email address on file is refused', () => {
+  const f = freshTenant();
+  const customer = f.tx(() => entities.createCustomer(f.repo, {
+    name: 'No Email Ltd', subsidiary_id: f.subsidiaryId, terms: 'NET30',
+  }));
+  assert.throws(() => f.tx(() => collections.emailStatement(f.repo, customer.id, { as_of: NOW })), /email address/);
+});
+
 test('the ladder is climbed one rung at a time, however late the debt', () => {
   const f = freshTenant();
   const { customer } = lateInvoice(f, { daysLate: 120, amount: 9000 });
@@ -195,6 +222,24 @@ test('a notice renders to a letter', () => {
   const buf = collections.noticePdf(f.repo, run.notices[0].id);
   assert.equal(buf.subarray(0, 5).toString(), '%PDF-');
   assert.ok(buf.length > 800);
+});
+
+test('emailing a notice queues it, and a withdrawn notice cannot be emailed', () => {
+  const f = freshTenant();
+  lateInvoice(f, { daysLate: 45, amount: 5000 });
+  const run = f.tx(() => collections.runDunning(f.repo, { as_of: NOW }));
+  const noticeId = run.notices[0].id;
+
+  const result = collections.emailNotice(f.repo, noticeId);
+  assert.equal(result.queued, true);
+  assert.equal(result.to, 'ap@tardy.test');
+  const row = f.repo.get('integration_event', result.id);
+  assert.equal(row.channel, 'email');
+  assert.equal(row.event_type, 'collections.notice.email');
+  assert.match(row.payload.subject, /.+/);
+
+  f.tx(() => collections.cancelNotice(f.repo, noticeId));
+  assert.throws(() => collections.emailNotice(f.repo, noticeId), /withdrawn/);
 });
 
 test('withdrawing a notice puts the customer back a rung', () => {

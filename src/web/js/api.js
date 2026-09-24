@@ -184,6 +184,9 @@ export const API = {
   company: () => get('/api/v1/setup/company'),
   integrationEvents: () => get('/api/v1/setup/integration-events'),
   retryIntegrationEvent: (id) => post(`/api/v1/setup/integration-events/${id}/retry`, {}),
+  emailSettings: () => get('/api/v1/setup/email-settings'),
+  saveEmailSettings: (body) => put('/api/v1/setup/email-settings', body),
+  sendTestEmail: (to) => post('/api/v1/setup/email-settings/test', { to }),
   // ---- attachments
   listAttachments: (record_type, record_id) => get('/api/v1/attachments', { record_type, record_id }),
   uploadAttachment: (record_type, record_id, filename, content_type, data) =>
@@ -240,6 +243,7 @@ export const API = {
   collectionsWorklist: (params) => get('/api/v1/collections/worklist', params),
   customerStatement: (id, params) => get(`/api/v1/collections/statement/${id}`, params),
   statementPdf: (id, params) => download(`/api/v1/collections/statement/${id}/pdf`, params),
+  emailStatement: (id, body) => post(`/api/v1/collections/statement/${id}/email`, body ?? {}),
   updateCollectionState: (id, body) => post(`/api/v1/collections/customers/${id}`, body),
   dunningPolicies: () => get('/api/v1/collections/policies'),
   dunningPolicy: (id) => get(`/api/v1/collections/policies/${id}`),
@@ -249,6 +253,7 @@ export const API = {
   dunningNotices: (params) => get('/api/v1/collections/notices', params),
   dunningNotice: (id) => get(`/api/v1/collections/notices/${id}`),
   noticePdf: (id) => download(`/api/v1/collections/notices/${id}/pdf`),
+  emailNotice: (id) => post(`/api/v1/collections/notices/${id}/email`, {}),
   cancelNotice: (id, body) => post(`/api/v1/collections/notices/${id}/cancel`, body ?? {}),
   writeOff: (txnId, body) => post(`/api/v1/collections/write-off/${txnId}`, body),
   runAllowance: (body) => post('/api/v1/collections/allowance', body ?? {}),
@@ -261,6 +266,7 @@ export const API = {
   payPaymentRun: (id, body) => post(`/api/v1/payment-runs/${id}/pay`, body ?? {}),
   cancelPaymentRun: (id, body) => post(`/api/v1/payment-runs/${id}/cancel`, body ?? {}),
   remittancePdf: (id, vendorId) => download(`/api/v1/payment-runs/${id}/remittance/${vendorId}`),
+  emailRemittance: (id, vendorId) => post(`/api/v1/payment-runs/${id}/remittance/${vendorId}/email`, {}),
   paymentFileCsv: (id) => download(`/api/v1/payment-runs/${id}/file`),
 
   // ---- tax returns and 1099s

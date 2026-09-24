@@ -7,7 +7,7 @@ import { icon } from '../icons.js';
 import { API } from '../api.js';
 import * as fmt from '../format.js';
 import * as store from '../store.js';
-import { empty, toast, notifyError, modal, confirm, formModal, statusTag, facts, loading, fieldControl } from '../ui.js';
+import { empty, toast, notifyError, notifyOk, modal, confirm, formModal, statusTag, facts, loading, fieldControl } from '../ui.js';
 
 const TABS = [
   { id: 'company', label: 'Company', perm: 'setup' },
@@ -484,7 +484,81 @@ async function currenciesTab() {
 }
 
 // --------------------------------------------------------- integrations
+/** Editing form for the tenant's SMTP settings. Plain markup rather than
+ * fieldControl/formModal, since a masked password input has no metadata
+ * field type to reuse. */
+function editEmailSettings(current, onSaved) {
+  const host = h('input', { type: 'text', value: current.host || '', placeholder: 'smtp.example.com' });
+  const port = h('input', { type: 'number', class: 'num', value: current.port || 587 });
+  const secure = h('input', { type: 'checkbox', checked: !!current.secure });
+  const username = h('input', { type: 'text', value: current.username || '', placeholder: 'Optional' });
+  const password = h('input', { type: 'password', placeholder: current.has_password ? 'Unchanged — leave blank to keep it' : 'Optional' });
+  const clearPassword = h('input', { type: 'checkbox' });
+  const fromAddress = h('input', { type: 'email', value: current.from_address || '', placeholder: 'billing@yourcompany.com' });
+  const fromName = h('input', { type: 'text', value: current.from_name || '', placeholder: 'Optional' });
+
+  modal({
+    title: 'Email (SMTP)', size: 'narrow',
+    body: h('div.form-grid',
+      h('div.field', h('label', 'Host', h('span.req', '*')), host),
+      h('div.field', h('label', 'Port'), port),
+      h('div.field.checkbox', secure, h('label', 'Connect with TLS from the start (usually port 465)')),
+      h('div.field', h('label', 'Username'), username),
+      h('div.field', h('label', 'Password'), password,
+        current.has_password ? h('div.field.checkbox', { style: { marginTop: '4px' } }, clearPassword, h('label', 'Clear the saved password')) : null),
+      h('div.field', h('label', 'From address', h('span.req', '*')), fromAddress),
+      h('div.field', h('label', 'From name'), fromName)),
+    actions: [
+      { label: 'Cancel', value: null },
+      {
+        label: 'Save', kind: 'primary',
+        onClick: async () => {
+          const body = {
+            host: host.value.trim(), port: Number(port.value) || 587, secure: secure.checked,
+            username: username.value.trim(), from_address: fromAddress.value.trim(), from_name: fromName.value.trim(),
+          };
+          if (password.value) body.password = password.value;
+          else if (clearPassword.checked) body.clear_password = true;
+          await API.saveEmailSettings(body);
+          notifyOk('Email settings saved');
+          onSaved();
+        },
+      },
+    ],
+  });
+}
+
+async function emailSettingsCard(go) {
+  const current = await API.emailSettings();
+  const sendTest = () => formModal({
+    title: 'Send a test email', submitLabel: 'Send',
+    fields: [{ name: 'to', label: 'Send to', type: 'email', required: true }],
+    values: { to: store.state.user.email || '' },
+    onSubmit: async ({ to }) => {
+      if (!to) throw { fields: { to: 'An address is required' }, message: 'Check the highlighted fields' };
+      await API.sendTestEmail(to);
+      notifyOk(`Test email sent to ${to}`);
+    },
+  });
+  return h('div.card', { style: { marginBottom: '14px' } },
+    h('div.card-head', h('h2', 'Email'),
+      store.state.user.is_owner && h('div.actions',
+        current.host && h('button.btn.sm', { onclick: sendTest }, 'Send test email'),
+        h('button.btn.sm', { onclick: () => editEmailSettings(current, () => go('/setup/integrations')) }, current.host ? 'Edit' : 'Set up'))),
+    h('div.card-body',
+      current.host
+        ? facts([
+          ['Server', `${current.host}:${current.port}${current.secure ? ' (TLS)' : ''}`],
+          current.username ? ['Username', current.username] : null,
+          ['Password', current.has_password ? 'Set' : h('span.muted', 'Not set')],
+          ['From', current.from_name ? `${current.from_name} <${current.from_address}>` : current.from_address],
+        ].filter(Boolean))
+        : h('div.muted', { style: { fontSize: '12.5px' } },
+          'Not configured. Statements, dunning notices and remittance advice are produced as PDFs either way — set this up to also email them directly.')));
+}
+
 async function integrationsTab(go) {
+  const email = await emailSettingsCard(go);
   const { rows } = await API.integrationEvents();
 
   const retry = async (id) => {
@@ -519,5 +593,5 @@ async function integrationsTab(go) {
         'That makes retries idempotent and gives you an audit trail of what was sent and when. A failed delivery retries itself with a growing delay up to 8 attempts, then stops and can be retried by hand.'),
       h('div.tag.blue', { style: { marginTop: '10px' } }, `Server scripts: ${store.state.meta.scripts_enabled ? 'enabled' : 'disabled (recommended)'}`)));
 
-  return h('div', explainer, h('div.card', h('div.card-head', h('h2', 'Delivery log')), table));
+  return h('div', email, explainer, h('div.card', h('div.card-head', h('h2', 'Delivery log')), table));
 }

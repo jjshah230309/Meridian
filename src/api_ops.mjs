@@ -223,6 +223,14 @@ export function registerOpsRoutes(r, P) {
       __filename: `statement-${(customer?.entity_no || 'customer').toLowerCase()}-${opts.as_of}.pdf`,
     };
   });
+  r.post(`${P}/collections/statement/:customerId/email`, async (ctx) => {
+    rbac.require$(ctx.access, 'collections', LEVEL.EDIT);
+    const opts = {
+      as_of: ctx.body?.as_of || today(), from: ctx.body?.from || null,
+      kind: ctx.body?.kind === 'activity' ? 'activity' : 'open_item',
+    };
+    return ctx.tx(() => collections.emailStatement(ctx.repo, ctx.params.customerId, opts));
+  });
   r.post(`${P}/collections/customers/:id`, async (ctx) => {
     rbac.require$(ctx.access, 'collections', LEVEL.EDIT);
     return ctx.tx(() => collections.updateCollectionState(ctx.repo, ctx.params.id, ctx.body || {}));
@@ -280,6 +288,10 @@ export function registerOpsRoutes(r, P) {
       __contentType: 'application/pdf',
       __filename: `${notice.notice_no.toLowerCase()}.pdf`,
     };
+  });
+  r.post(`${P}/collections/notices/:id/email`, async (ctx) => {
+    rbac.require$(ctx.access, 'dunning_notice', LEVEL.EDIT);
+    return ctx.tx(() => collections.emailNotice(ctx.repo, ctx.params.id));
   });
   r.post(`${P}/collections/notices/:id/cancel`, async (ctx) => {
     rbac.require$(ctx.access, 'dunning_notice', LEVEL.EDIT);
@@ -346,6 +358,10 @@ export function registerOpsRoutes(r, P) {
       __contentType: 'application/pdf',
       __filename: `remittance-${(vendor?.entity_no || 'supplier').toLowerCase()}.pdf`,
     };
+  });
+  r.post(`${P}/payment-runs/:id/remittance/:vendorId/email`, async (ctx) => {
+    rbac.require$(ctx.access, 'payment_run', LEVEL.EDIT);
+    return ctx.tx(() => payruns.emailRemittance(ctx.repo, ctx.params.id, ctx.params.vendorId));
   });
   r.get(`${P}/payment-runs/:id/file`, async (ctx) => {
     rbac.require$(ctx.access, 'payment_run', LEVEL.VIEW);

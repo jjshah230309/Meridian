@@ -1197,6 +1197,47 @@ export function buildApi({ config }) {
     });
   });
 
+  // ------------------------------------------------------------- email
+  // Owner-only, same as /settings/connection above: this is how the whole
+  // tenant sends mail, not a per-user preference. The password is
+  // write-only -- GET never returns it, encrypted or not, only whether
+  // one is configured -- matching the API token "shown once" precedent.
+  r.get(`${P}/setup/email-settings`, async (ctx) => {
+    rbac.require$(ctx.access, 'setup', LEVEL.VIEW);
+    return setup.getEmailSettings(ctx.repo);
+  });
+
+  r.put(`${P}/setup/email-settings`, async (ctx) => {
+    if (!ctx.user?.is_owner) throw forbidden('Only the account owner can change how this copy sends mail.');
+    const body = ctx.body || {};
+    if (body.host && !body.from_address && !setup.getEmailSettings(ctx.repo).from_address) {
+      throw new ValidationError({ from_address: 'A from address is required once a host is configured' });
+    }
+    return ctx.tx(() => {
+      const saved = setup.setEmailSettings(ctx.repo, config, body);
+      audit.record(ctx.repo, { recordType: 'setup', recordId: null, action: 'email-settings',
+        changes: { host: { from: null, to: saved.host }, from_address: { from: null, to: saved.from_address } } });
+      return saved;
+    });
+  });
+
+  r.post(`${P}/setup/email-settings/test`, async (ctx) => {
+    if (!ctx.user?.is_owner) throw forbidden('Only the account owner can send a test email.');
+    const to = String(ctx.body?.to || ctx.user.email || '').trim();
+    if (!to) throw badRequest('An address to send the test to is required');
+    const resolved = setup.resolveEmailSettings(ctx.repo, config);
+    if (!resolved) throw unprocessable('Configure and save an SMTP host first.');
+    // The one deliberate exception to "queued, never called inline" --
+    // this is a user-triggered diagnostic action, not a document posting,
+    // and the whole point is to find out right now whether it works.
+    const smtp = await import('./core/smtp.mjs');
+    await smtp.sendMail(resolved, {
+      from: resolved.from, to, subject: 'Meridian test email',
+      text: `This is a test message from ${ctx.tenant.name}'s copy of Meridian. If you can read this, outgoing email is set up correctly.`,
+    });
+    return { ok: true };
+  });
+
   r.get(`${P}/setup/integration-events`, async (ctx) => {
     rbac.require$(ctx.access, 'setup', LEVEL.VIEW);
     return { rows: ctx.repo.query('SELECT * FROM integration_event WHERE tenant_id = :t ORDER BY created_at DESC LIMIT 100') };

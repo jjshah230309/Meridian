@@ -25,6 +25,35 @@ export function loadServerSecret(dataDir) {
   return secret;
 }
 
+// -------------------------------------------------------- secretbox
+// Every other secret this file stores is hashed, not encrypted -- a
+// password, a session token, an API token all only ever need to be
+// *verified* again, never read back. An SMTP password is different:
+// sending mail means presenting the real password to the server every
+// time, so it has to be recoverable. Encrypted at rest with a key
+// derived (HKDF, so the encryption key is not the raw secret itself,
+// and derived per purpose so a key for one use can't decrypt another)
+// from the same server secret that already signs CSRF tokens.
+const SECRETBOX_ALGO = 'aes-256-gcm';
+const deriveKey = (secret, purpose) => Buffer.from(crypto.hkdfSync('sha256', secret, '', purpose, 32));
+
+export function encryptSecret(secret, plaintext, purpose = 'meridian:secretbox') {
+  const key = deriveKey(secret, purpose);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(SECRETBOX_ALGO, key, iv);
+  const ciphertext = Buffer.concat([cipher.update(String(plaintext ?? ''), 'utf8'), cipher.final()]);
+  return [iv, cipher.getAuthTag(), ciphertext].map((b) => b.toString('base64')).join(':');
+}
+
+export function decryptSecret(secret, encoded, purpose = 'meridian:secretbox') {
+  if (!encoded) return '';
+  const [ivB64, tagB64, ctB64] = String(encoded).split(':');
+  if (!ivB64 || !tagB64 || !ctB64) throw new Error('Malformed encrypted value');
+  const decipher = crypto.createDecipheriv(SECRETBOX_ALGO, deriveKey(secret, purpose), Buffer.from(ivB64, 'base64'));
+  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+  return Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64')), decipher.final()]).toString('utf8');
+}
+
 // ------------------------------------------------------------ passwords
 export function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');

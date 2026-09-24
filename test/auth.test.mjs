@@ -70,3 +70,27 @@ test('a correct password on an active, unlocked account still succeeds', () => {
   assert.equal(result.ok, true);
   assert.ok(result.session);
 });
+
+// ------------------------------------------------------------- secretbox
+test('encryptSecret/decryptSecret round-trip exactly, and are not plaintext at rest', () => {
+  const secret = 'a-fake-server-secret-at-least-32-bytes-long';
+  const encoded = auth.encryptSecret(secret, 'hunter2, a real SMTP password', 'meridian:smtp');
+  assert.ok(!encoded.includes('hunter2'), 'the plaintext must not appear anywhere in the stored value');
+  assert.equal(auth.decryptSecret(secret, encoded, 'meridian:smtp'), 'hunter2, a real SMTP password');
+});
+
+test('decryptSecret refuses a value encrypted for a different purpose or a different secret', () => {
+  const secret = 'a-fake-server-secret-at-least-32-bytes-long';
+  const encoded = auth.encryptSecret(secret, 'hunter2', 'meridian:smtp');
+  assert.throws(() => auth.decryptSecret(secret, encoded, 'meridian:something-else'),
+    'a key derived for a different purpose must not decrypt this value');
+  assert.throws(() => auth.decryptSecret('a-completely-different-secret-32-bytes', encoded, 'meridian:smtp'),
+    'the wrong server secret must not decrypt this value');
+});
+
+test('decryptSecret of an empty or malformed value does not throw a confusing error', () => {
+  const secret = 'a-fake-server-secret-at-least-32-bytes-long';
+  assert.equal(auth.decryptSecret(secret, ''), '');
+  assert.equal(auth.decryptSecret(secret, null), '');
+  assert.throws(() => auth.decryptSecret(secret, 'not-the-right-shape'));
+});

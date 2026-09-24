@@ -462,8 +462,9 @@ const SECTION_RENDERERS = {
       h('dt', 'Signed in as'), h('dd', `${store.state.user.name} · ${store.state.user.email}`),
       h('dt', 'Roles'), h('dd', store.state.roles.join(', ') || '—')),
     h('div.callout', { style: { marginTop: 'var(--s5)' } },
-      'Meridian has no third-party dependencies and makes no outbound connections. '
-      + 'Nothing you enter leaves the machine it is entered on unless you export it deliberately.'),
+      'Meridian has no third-party dependencies and makes no outbound connections unless you set one up yourself — '
+      + 'an SMTP server for outgoing email (Setup → Integrations), or a webhook a workflow calls. '
+      + 'Nothing you enter leaves the machine it is entered on otherwise, unless you export it deliberately.'),
     h('div.row', { style: { marginTop: 'var(--s4)', gap: 'var(--s2)' } },
       h('button.btn', { onclick: () => window.__meridianGo('/help') }, 'Open the manual'),
       h('button.btn', { onclick: () => showShortcutSheet() }, 'Keyboard shortcuts'))),
