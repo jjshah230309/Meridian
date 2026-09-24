@@ -251,6 +251,70 @@ test('a restricted role is refused, with a readable reason', async () => {
   assert.ok(meta.records.item);
 });
 
+test('entity open-documents and credit routes are RBAC-checked', async () => {
+  const c = client();
+  await c.login();
+
+  const roles = (await c.call('GET', '/api/v1/setup/roles')).body.roles;
+  const warehouse = roles.find((r) => r.name === 'Warehouse');
+  await c.call('POST', '/api/v1/setup/users', {
+    name: 'Wendy Warehouse', email: 'wendy-credit@test.local', password: PASSWORD, role_ids: [warehouse.id],
+  });
+
+  const customer = (await c.call('POST', '/api/v1/records/customer', { name: 'Credit Check Co', terms: 'NET30' })).body;
+
+  const w = client();
+  await w.login('wendy-credit@test.local', PASSWORD);
+
+  // Warehouse has no permission on `customer` at all, so both routes must refuse it.
+  const openDocs = await w.call('GET', `/api/v1/entities/customer/${customer.id}/open-documents`);
+  assert.equal(openDocs.status, 403, 'a role with no customer visibility must not see its open documents');
+
+  const credit = await w.call('GET', `/api/v1/entities/customer/${customer.id}/credit`);
+  assert.equal(credit.status, 403, 'a role with no customer visibility must not see its credit standing');
+
+  // An unknown entity type must be rejected before touching the database.
+  const badType = await c.call('GET', `/api/v1/entities/not_a_real_type/${customer.id}/open-documents`);
+  assert.equal(badType.status, 400);
+
+  // The owner (full access) can still see both.
+  assert.equal((await c.call('GET', `/api/v1/entities/customer/${customer.id}/open-documents`)).status, 200);
+  assert.equal((await c.call('GET', `/api/v1/entities/customer/${customer.id}/credit`)).status, 200);
+});
+
+test('txn transform routes check RBAC on the source document, not just the target', async () => {
+  const c = client();
+  await c.login();
+
+  const item = (await c.call('POST', '/api/v1/records/item', {
+    sku: 'API-XF', name: 'Transform Widget', type: 'inventory', base_price: 50, purchase_price: 20,
+  })).body;
+  const customer = (await c.call('POST', '/api/v1/records/customer', { name: 'Transform Target Co', terms: 'NET30' })).body;
+  const location = (await c.call('GET', '/api/v1/meta')).body.locations[0];
+  const so = (await c.call('POST', '/api/v1/records/sales_order', {
+    entity_id: customer.id, txn_date: '2026-06-01', location_id: location.id,
+    lines: [{ item_id: item.id, quantity: 2 }],
+  })).body;
+
+  // A role that can create fulfillments but was never granted any visibility
+  // into sales orders -- the source document being transformed.
+  const roles = (await c.call('GET', '/api/v1/setup/roles')).body.roles;
+  const warehouse = roles.find((r) => r.name === 'Warehouse');
+  await c.call('PUT', `/api/v1/setup/roles/${warehouse.id}/permissions`, { permissions: { fulfillment: 4 } });
+  await c.call('POST', '/api/v1/setup/users', {
+    name: 'Wendy NoOrders', email: 'wendy-xf@test.local', password: PASSWORD, role_ids: [warehouse.id],
+  });
+
+  const w = client();
+  await w.login('wendy-xf@test.local', PASSWORD);
+
+  const preview = await w.call('GET', `/api/v1/txn/${so.id}/transform/FULFILLMENT`);
+  assert.equal(preview.status, 403, 'previewing a transform must check access to the source document');
+
+  const posted = await w.call('POST', `/api/v1/txn/${so.id}/transform/FULFILLMENT`, { txn_date: '2026-06-02' });
+  assert.equal(posted.status, 403, 'creating a transform must check access to the source document, not just the target');
+});
+
 test('unknown routes and methods return structured errors', async () => {
   const c = client();
   await c.login();
@@ -396,4 +460,48 @@ test('every report endpoint responds', async () => {
     const res = await c.call('GET', p);
     assert.equal(res.status, 200, `${p} returned ${res.status}: ${res.body?.error?.message || ''}`);
   }
+});
+
+test('one bad vendor in a reorder run does not roll back the other POs already created', async () => {
+  const c = client();
+  await c.login();
+
+  const vendor = (await c.call('POST', '/api/v1/records/vendor', { name: 'Good Vendor Co' })).body;
+  const item = (await c.call('POST', '/api/v1/records/item', {
+    sku: 'API-REORDER', name: 'Reorder Widget', type: 'inventory', base_price: 40, purchase_price: 10,
+  })).body;
+  const location = (await c.call('GET', '/api/v1/meta')).body.locations[0];
+
+  const picks = [
+    { sku: item.sku, item_id: item.id, location_id: location.id, preferred_vendor_id: vendor.id, suggested_qty: 5_000_000 },
+    { sku: item.sku, item_id: item.id, location_id: location.id, preferred_vendor_id: 'nonexistent-vendor-id', suggested_qty: 5_000_000 },
+  ];
+  const r = await c.call('POST', '/api/v1/inventory/reorder/create-pos', { suggestions: picks });
+  assert.equal(r.status, 404, 'the run surfaces the bad vendor as an error');
+
+  const pos = (await c.call('GET', `/api/v1/txn?type=PURCHASE_ORDER&entity_id=${vendor.id}`)).body;
+  assert.equal(pos.rows.length, 1, 'the PO for the valid vendor must survive the other group failing');
+});
+
+test('BOM explode honors a fractional quantity instead of truncating it', async () => {
+  const c = client();
+  await c.login();
+
+  const component = (await c.call('POST', '/api/v1/records/item', {
+    sku: 'API-COMP', name: 'Explode Component', type: 'inventory', base_price: 10, purchase_price: 4,
+  })).body;
+  const assembly = (await c.call('POST', '/api/v1/records/item', {
+    sku: 'API-ASSY', name: 'Explode Assembly', type: 'inventory', base_price: 30, purchase_price: 0,
+  })).body;
+  const bom = (await c.call('POST', '/api/v1/boms', {
+    item_id: assembly.id, name: 'Assembly rev A', lines: [{ component_id: component.id, quantity: 2 }],
+  })).body;
+  await c.call('POST', `/api/v1/boms/${bom.id}/release`);
+
+  // Half an assembly should need one component, not zero -- truncating the
+  // quantity to an integer before scaling used to floor 0.5 down to 0.
+  const r = await c.call('GET', `/api/v1/items/${assembly.id}/explode?quantity=0.5`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.components.length, 1);
+  assert.equal(r.body.components[0].quantity_display, 1, '0.5 assemblies x 2 components each = 1 component');
 });

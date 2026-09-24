@@ -7,6 +7,7 @@ import { API } from '../api.js';
 import * as fmt from '../format.js';
 import * as store from '../store.js';
 import { fieldControl, displayValue, empty, loading, toast, notifyError, confirm, modal, statusTag, facts, formatAddress, moneyCell } from '../ui.js';
+import { icon } from '../icons.js';
 
 const SYSTEM_SECTION = 'System';
 
@@ -103,13 +104,13 @@ export async function recordView(route, { go }) {
   function buildHead() {
     const el = h('div.page-head',
       h('div.titles',
-        h('div.breadcrumb', h('a', { href: `#/list/${type}`, onclick: (e) => { e.preventDefault(); go(`/list/${type}`); } }, meta.plural), ' / ', record[meta.title] || ''),
+        h('div.breadcrumb', h('a', { href: `#/list/${type}`, onclick: (e) => { e.preventDefault(); go(`/list/${type}`); } }, meta.plural), ' / ', h('span', { style: { fontWeight: 500 } }, title())),
         h('h1', title(), record.status ? statusTag(record.status) : null, record.active === 0 ? h('span.tag', 'Inactive') : null),
         h('div.page-sub', subtitleFor(type, record))),
       h('div.page-actions',
         ...recordActions(type, record, data, go, refresh),
-        canEdit && !editing && h('button.btn.primary', { onclick: () => { renderEdit(); } }, 'Edit'),
-        store.can(type, store.LEVEL.FULL) && h('button.btn.danger', { onclick: remove }, record.active !== undefined ? 'Deactivate' : 'Delete')));
+        canEdit && !editing && h('button.btn.primary', { onclick: () => { renderEdit(); } }, icon('pencil', { size: 14 }), 'Edit'),
+        store.can(type, store.LEVEL.FULL) && h('button.btn.danger', { onclick: remove }, icon('trash', { size: 14 }), record.active !== undefined ? 'Deactivate' : 'Delete')));
     head = el;
     return el;
   }

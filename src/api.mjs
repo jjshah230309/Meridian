@@ -262,7 +262,7 @@ export function buildApi({ config }) {
     let out;
     if (definition._orSearch?.fields?.length) {
       const { q, fields } = definition._orSearch;
-      const rf = rbac.rowFilter(ctx.access, m.table, { alias: 'r' });
+      const rf = rbac.rowFilter(ctx.access, m.table, { alias: 'r', db: ctx.repo.db });
       // A custom type's own fields live in the JSON column, so a free-text
       // search has to reach into it rather than name a column that is not there.
       const fmap = meta.fieldMap(type, ctx.repo);
@@ -356,7 +356,9 @@ export function buildApi({ config }) {
           ? HANDLERS[type].update(ctx.repo, id, mutable)
           : genericUpdate(ctx.repo, type, id, mutable));
       if (mutable.custom !== undefined && HANDLERS[type]?.update && !m.isTransaction && !m.customType) {
-        ctx.repo.update(m.table, id, { custom: platform.validateCustom(ctx.repo, type, { ...(before.custom || {}), ...mutable.custom }) });
+        ctx.repo.update(m.table, id, {
+          custom: { ...(before.custom || {}), ...platform.validateCustom(ctx.repo, type, mutable.custom, { partial: true }) },
+        });
       }
       withWorkflows(ctx.repo, type, 'after_update', updated, before, null);
       if (m.customType) return customRecords.getRecord(ctx.repo, type, id);
@@ -575,7 +577,7 @@ export function buildApi({ config }) {
   r.get(`${P}/txn`, async (ctx) => {
     const type = ctx.query.type || null;
     if (type && meta.getMeta(String(type).toLowerCase())) requirePerm(ctx, String(type).toLowerCase(), LEVEL.VIEW);
-    const rf = rbac.rowFilter(ctx.access, 'txn', { alias: 't' });
+    const rf = rbac.rowFilter(ctx.access, 'txn', { alias: 't', db: ctx.repo.db });
     return T.listTxns(ctx.repo, {
       type: type ? String(type).toUpperCase() : null,
       status: ctx.query.status || null, entityId: ctx.query.entity_id || null,
@@ -626,11 +628,18 @@ export function buildApi({ config }) {
 
   r.get(`${P}/txn/:id/transform/:target`, async (ctx) => {
     const target = String(ctx.params.target).toUpperCase();
+    const t = T.getTxn(ctx.repo, ctx.params.id);
+    if (!t) throw notFound('Transaction not found');
+    requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.VIEW);
+    if (!rbac.canSeeRow(ctx.access, 'txn', t)) throw forbidden('You do not have access to that transaction.');
     return T.transformPreview(ctx.repo, ctx.params.id, target);
   });
 
   r.post(`${P}/txn/:id/transform/:target`, async (ctx) => {
     const target = String(ctx.params.target).toUpperCase();
+    const t = T.requireTxn(ctx.repo, ctx.params.id);
+    requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.VIEW);
+    if (!rbac.canSeeRow(ctx.access, 'txn', t)) throw forbidden('You do not have access to that transaction.');
     requirePerm(ctx, T.PERM_FOR[target], LEVEL.CREATE);
     return ctx.tx(() => {
       const created = T.transform(ctx.repo, ctx.params.id, target, ctx.body || {});
@@ -652,10 +661,22 @@ export function buildApi({ config }) {
     return ctx.tx(() => T.unapplyPayment(ctx.repo, ctx.params.id, ctx.body.txn_id));
   });
 
-  r.get(`${P}/entities/:entityType/:id/open-documents`, async (ctx) =>
-    T.openDocumentsFor(ctx.repo, ctx.params.entityType, ctx.params.id));
+  r.get(`${P}/entities/:entityType/:id/open-documents`, async (ctx) => {
+    const entityType = String(ctx.params.entityType);
+    if (!['customer', 'vendor'].includes(entityType)) throw badRequest(`Unknown entity type "${entityType}"`);
+    requirePerm(ctx, entityType, LEVEL.VIEW);
+    const entity = ctx.repo.get(entityType, ctx.params.id);
+    if (!entity) throw notFound(`${entityType === 'customer' ? 'Customer' : 'Vendor'} not found`);
+    if (!rbac.canSeeRow(ctx.access, entityType, entity)) throw forbidden('You do not have access to that record.');
+    return T.openDocumentsFor(ctx.repo, entityType, ctx.params.id);
+  });
 
-  r.get(`${P}/entities/customer/:id/credit`, async (ctx) => entities.customerFinancials(ctx.repo, ctx.params.id));
+  r.get(`${P}/entities/customer/:id/credit`, async (ctx) => {
+    requirePerm(ctx, 'customer', LEVEL.VIEW);
+    const customer = entities.getCustomer(ctx.repo, ctx.params.id);
+    if (!rbac.canSeeRow(ctx.access, 'customer', customer)) throw forbidden('You do not have access to that customer.');
+    return entities.customerFinancials(ctx.repo, ctx.params.id);
+  });
 
   r.post(`${P}/pricing/quote`, async (ctx) => {
     rbac.require$(ctx.access, 'item', LEVEL.VIEW);
@@ -705,23 +726,24 @@ export function buildApi({ config }) {
   r.post(`${P}/inventory/reorder/create-pos`, async (ctx) => {
     rbac.require$(ctx.access, 'purchase_order', LEVEL.CREATE);
     const picks = ctx.body?.suggestions || [];
-    return ctx.tx(() => {
-      const byVendor = {};
-      for (const s of picks) {
-        const vendorId = s.preferred_vendor_id || ctx.body.vendor_id;
-        if (!vendorId) throw unprocessable(`No vendor for ${s.sku}. Set a preferred vendor on the item, or choose one for the whole run.`);
-        (byVendor[`${vendorId}|${s.location_id}`] ||= { vendorId, locationId: s.location_id, lines: [] })
-          .lines.push({ item_id: s.item_id, quantity: Qty.toNumber(s.suggested_qty) });
-      }
-      const created = [];
-      for (const g of Object.values(byVendor)) {
-        created.push(T.createTxn(ctx.repo, 'PURCHASE_ORDER', {
-          entity_id: g.vendorId, location_id: g.locationId, txn_date: today(),
-          memo: 'Generated from reorder analysis', lines: g.lines,
-        }));
-      }
-      return { created: created.map((c) => ({ id: c.id, txn_no: c.txn_no, total: c.total, entity_id: c.entity_id })) };
-    });
+    const byVendor = {};
+    for (const s of picks) {
+      const vendorId = s.preferred_vendor_id || ctx.body.vendor_id;
+      if (!vendorId) throw unprocessable(`No vendor for ${s.sku}. Set a preferred vendor on the item, or choose one for the whole run.`);
+      (byVendor[`${vendorId}|${s.location_id}`] ||= { vendorId, locationId: s.location_id, lines: [] })
+        .lines.push({ item_id: s.item_id, quantity: Qty.toNumber(s.suggested_qty) });
+    }
+    // Each vendor's PO is its own transaction: one vendor's order failing
+    // (a bad item, a closed period) must not undo the POs already created
+    // for every other vendor in the same run.
+    const created = [];
+    for (const g of Object.values(byVendor)) {
+      created.push(ctx.repo.tx(() => T.createTxn(ctx.repo, 'PURCHASE_ORDER', {
+        entity_id: g.vendorId, location_id: g.locationId, txn_date: today(),
+        memo: 'Generated from reorder analysis', lines: g.lines,
+      })));
+    }
+    return { created: created.map((c) => ({ id: c.id, txn_no: c.txn_no, total: c.total, entity_id: c.entity_id })) };
   });
 
   // ------------------------------------------------------------------ CRM

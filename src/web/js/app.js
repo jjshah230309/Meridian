@@ -63,7 +63,7 @@ function renderLogin(prefill = {}) {
     }
     if (tenants.some((t) => t.slug === 'northwind')) {
       mount(hint,
-        h('div', { style: { fontWeight: 620, marginBottom: '4px', color: 'var(--text)', display: 'flex', gap: '6px', alignItems: 'center' } },
+        h('div', { style: { fontWeight: 600, marginBottom: '4px', color: 'var(--text)', display: 'flex', gap: '6px', alignItems: 'center' } },
           icon('lightbulb', { size: 13 }), 'Demo company'),
         h('div', 'Sign in as ', h('code', 'admin@northwind.test')),
         h('div', 'Password ', h('code', 'Northwind-Demo-2026')));
@@ -73,11 +73,13 @@ function renderLogin(prefill = {}) {
 
   mount(app, h('div.login-wrap',
     h('div.login-card',
-      h('div.login-brand', h('div.brand-mark', 'M'), h('div.login-title', 'Meridian')),
-      h('div.login-sub', 'Cloud ERP & Business Management'),
-      form,
-      hint,
-      h('div.login-foot', 'Your data stays on this machine.'))));
+      h('div.login-head',
+        h('div.login-brand', h('div.brand-mark', 'M'), h('div.login-title', 'Meridian')),
+        h('div.login-sub', 'Cloud ERP & Business Management')),
+      h('div.login-body',
+        form,
+        hint,
+        h('div.login-foot', 'Your data stays on this machine.')))));
   setTimeout(() => (prefill.email ? password : email).focus(), 50);
 }
 
@@ -585,7 +587,7 @@ function accountMenu(anchor) {
 const paletteLabel = () => {
   const pal = store.PALETTES.find((p) => p.id === store.state.palette);
   const face = store.TYPEFACES.find((t) => t.id === store.state.typeface);
-  return `${pal?.name || 'Ink & Brass'} · ${face?.name || 'IBM Plex'}`;
+  return `${pal?.name || 'Carbon & Cobalt'} · ${face?.name || 'Styrene & Tiempos'}`;
 };
 
 /** After a theme change from a menu, the topbar's own icon has to agree. */

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 import { routes } from '../src/web/js/views/index.js';
 import { TOURS } from '../src/web/js/tour.js';
@@ -161,6 +162,41 @@ test('every screen the sidebar links to is a real screen', () => {
   assert.deepEqual(dead, [], 'sidebar entries with no route');
 });
 
+test('every registered shortcut uses a real KeyboardEvent.key, not its display name', () => {
+  // shortcuts.js's key handler builds its match string from the raw
+  // KeyboardEvent -- e.key.toLowerCase() for anything but a modifier, so a
+  // press of "/" produces the token "/", never "slash". SYMBOL in
+  // shortcuts.js maps a handful of these to a printable glyph for
+  // `renderKeys`'s on-screen hint (slash -> "/", enter -> "↵", ...), but
+  // that map is display-only. A command registered with the *display* name
+  // instead of the real key ("slash" rather than "/") renders a correct-
+  // looking kbd hint and then can never actually fire, silently -- exactly
+  // what happened to "/" for jumping into search.
+  const REAL_SPECIAL_KEYS = new Set(['enter', 'escape', 'tab', 'backspace', 'space', 'delete', 'home', 'end',
+    'pageup', 'pagedown', 'insert', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']);
+  const DISPLAY_ONLY_NAMES = new Set(['slash', 'esc']); // SYMBOL entries that are not real e.key values
+
+  const sources = [read(WEB, 'js', 'commands.js'), read(WEB, 'js', 'app.js')];
+  const offenders = [];
+  for (const src of sources) {
+    for (const m of src.matchAll(/keys:\s*'([^']+)'/g)) {
+      const binding = m[1];
+      for (const step of binding.split(' ')) {           // sequence steps ("g d")
+        for (const token of step.split('+')) {            // chord parts ("mod+shift+p")
+          const t = token.toLowerCase();
+          if (t === 'mod' || t === 'shift' || t === 'alt') continue;
+          if (t.length === 1) continue;                   // a literal character key
+          if (REAL_SPECIAL_KEYS.has(t)) continue;
+          if (DISPLAY_ONLY_NAMES.has(t)) offenders.push(`"${binding}" uses the display name "${t}" instead of the real key`);
+          // Anything else unrecognized is worth seeing too, not silently passed.
+          else if (!/^[a-z0-9]$/.test(t)) offenders.push(`"${binding}": unrecognized key token "${t}"`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], 'a registered shortcut cannot match a real keypress');
+});
+
 // ------------------------------------------------------------- theming
 const CSS = () => read(WEB, 'css', 'app.css');
 
@@ -169,23 +205,38 @@ function tokensIn(css, selector) {
   const at = css.indexOf(`\n${selector}`);
   assert.ok(at > -1, `no block for ${selector} -- has it been renamed?`);
   const body = css.slice(at, css.indexOf('\n}', at));
-  return new Set([...body.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map((m) => m[1]));
+  // Not anchored to line-start: several palette blocks pack more than one
+  // `--token: value;` on the same physical line, and a `^`-anchored match
+  // silently sees only the first one -- which used to make this check pass
+  // without ever actually reading most of a compact block's tokens.
+  return new Set([...body.matchAll(/(--[a-z0-9-]+):/g)].map((m) => m[1]));
 }
 
-const LIGHT_BLOCKS = [':root[data-palette="graphite"] {', ':root[data-palette="slate"] {', ':root[data-palette="midnight"] {'];
-const DARK_BLOCKS = ['[data-theme="dark"][data-palette="graphite"] {', '[data-theme="dark"][data-palette="slate"] {', '[data-theme="dark"][data-palette="midnight"] {'];
+const LIGHT_BLOCKS = [':root[data-palette="carbon"] {', ':root[data-palette="ink"] {', ':root[data-palette="graphite"] {', ':root[data-palette="slate"] {', ':root[data-palette="midnight"] {'];
+const DARK_BLOCKS = ['[data-theme="dark"][data-palette="carbon"] {', '[data-theme="dark"][data-palette="ink"] {', '[data-theme="dark"][data-palette="graphite"] {', '[data-theme="dark"][data-palette="slate"] {', '[data-theme="dark"][data-palette="midnight"] {'];
+
+// Status colours and the two rings never vary by palette -- none of the
+// named light palettes redeclare them, on purpose, and inherit the base
+// rule's values through the ordinary cascade (":root" still matches their
+// element; it is simply lower-specificity than their own palette block,
+// so it only supplies what that block does not set). Dark mode is the
+// exception: its status colours differ from light mode's, and only the
+// default palette's dark block overrides them for itself, so every other
+// palette's dark cut has to restate them or silently keep the light values.
+const SHARED_TOKENS = ['--pos', '--neg', '--warn', '--info', '--pos-soft', '--neg-soft', '--warn-soft', '--info-soft', '--row-hover', '--row-selected', '--ring', '--ring-neg', '--accent-rgb'];
 
 test('every palette defines every colour token', () => {
   // A token a palette forgets falls back to nothing, and a component painted
   // with nothing is invisible rather than wrong -- which is why this is a test
   // and not a code review.
   const css = CSS();
-  const base = tokensIn(css, ':root,\n:root[data-palette="ink"] {');
-  const baseDark = tokensIn(css, '[data-theme="dark"],\n[data-theme="dark"][data-palette="ink"] {');
+  const base = tokensIn(css, ':root,\n:root[data-palette="obsidian"] {');
+  const baseDark = tokensIn(css, '[data-theme="dark"],\n[data-theme="dark"][data-palette="obsidian"] {');
   assert.ok(base.size > 30, 'the default palette should define the whole set');
 
+  const basePaletteSpecific = [...base].filter((t) => !SHARED_TOKENS.includes(t));
   for (const sel of LIGHT_BLOCKS) {
-    const missing = [...base].filter((t) => !tokensIn(css, sel).has(t));
+    const missing = basePaletteSpecific.filter((t) => !tokensIn(css, sel).has(t));
     assert.deepEqual(missing, [], `${sel} is missing tokens the default palette has`);
   }
   for (const sel of DARK_BLOCKS) {
@@ -234,7 +285,7 @@ test('every family the typefaces offer is actually bundled', () => {
   const declared = new Set([...fontCss.matchAll(/font-family:\s*'([^']+)'/g)].map((m) => m[1]));
   const block = css.slice(css.indexOf('   Typefaces'), css.indexOf('   Palettes — light'));
   const asked = new Set([...block.matchAll(/'([A-Z][^']+)'/g)].map((m) => m[1]));
-  const missing = [...asked].filter((f) => !declared.has(f) && !/^(Segoe UI|Georgia|Times New Roman|SF Pro Text|SF Pro Display|SF Mono)$/.test(f));
+  const missing = [...asked].filter((f) => !declared.has(f) && !/^(Segoe UI|Georgia|Times New Roman|SF Pro Text|SF Pro Display|SF Mono|Styrene A|Styrene B|Tiempos Text|Tiempos Headline)$/.test(f));
   assert.deepEqual(missing, [], 'a typeface option names a family with no bundled files');
 });
 
@@ -249,6 +300,30 @@ test('nothing asks for a weight that is not bundled', () => {
   const asked = [...body.matchAll(/font-weight:\s*(\d+)/g)].map((m) => Number(m[1]));
   const bad = [...new Set(asked)].filter((w) => !have.has(w));
   assert.deepEqual(bad, [], `weights used but not bundled (bundled: ${[...have].sort().join(', ')})`);
+});
+
+test('nothing in an inline style asks for a weight that is not bundled either', () => {
+  // The CSS-only version of this check above missed nine call sites entirely:
+  // `style: { fontWeight: 550 }` and friends, written straight into a view's
+  // `h()` call rather than through a stylesheet rule. Same failure mode --
+  // fake bold at 13px -- just invisible to a test that only reads app.css.
+  const fontCss = read(WEB, 'fonts', 'fonts.css');
+  const have = new Set([...fontCss.matchAll(/font-weight:\s*(\d+)/g)].map((m) => Number(m[1])));
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.name.endsWith('.js')) continue;
+      const src = fs.readFileSync(full, 'utf8');
+      for (const m of src.matchAll(/fontWeight:\s*['"]?(\d+)/g)) {
+        const w = Number(m[1]);
+        if (!have.has(w)) offenders.push(`${path.relative(WEB, full)}: fontWeight ${w}`);
+      }
+    }
+  };
+  walk(path.join(WEB, 'js'));
+  assert.deepEqual(offenders, [], `inline weights used but not bundled (bundled: ${[...have].sort().join(', ')})`);
 });
 
 test('the palette and typeface lists agree with the stylesheet', async () => {
@@ -281,4 +356,26 @@ test('the interface no longer draws icons out of geometric Unicode', () => {
   };
   walk(path.join(WEB, 'js'));
   assert.deepEqual(offenders, [], 'geometric Unicode used as an icon');
+});
+
+test('every view module actually parses', () => {
+  // Views are imported lazily, only when a browser actually navigates to
+  // their route (see views/index.js) -- so a stray or missing parenthesis
+  // in one is invisible to every other test here, which only reads route
+  // tables and icon names as text. It surfaces as a real user opening the
+  // Dashboard or a list screen and getting "That page could not be loaded."
+  // `node --check` parses without executing, so it is safe to run on a
+  // module that expects `document` to exist.
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.name.endsWith('.js')) continue;
+      const result = spawnSync(process.execPath, ['--check', full], { encoding: 'utf8' });
+      if (result.status !== 0) offenders.push(`${path.relative(WEB, full)}: ${result.stderr.split('\n').find((l) => l.includes('Error')) || result.stderr.trim()}`);
+    }
+  };
+  walk(path.join(WEB, 'js'));
+  assert.deepEqual(offenders, [], 'a view module has a syntax error and would fail to load in the browser');
 });

@@ -8,7 +8,7 @@ import * as fmt from './format.js';
 export const state = {
   user: null, tenant: null, permissions: {}, roles: [], restrictions: {},
   meta: null, savedSearches: [], notifications: [], unread: 0,
-  subsidiary: null, theme: 'light', palette: 'ink', typeface: 'plex',
+  subsidiary: null, theme: 'light', palette: 'obsidian', typeface: 'styrene',
 };
 
 const refCache = new Map();
@@ -173,6 +173,8 @@ const uniq = (a) => [...new Set(a)];
  * the list again.
  */
 export const PALETTES = [
+  { id: 'obsidian', name: 'Obsidian & Indigo', note: 'The default: midnight chrome, electric indigo accent' },
+  { id: 'carbon', name: 'Carbon & Cobalt', note: 'Cool graphite chrome, vivid cobalt accent' },
   { id: 'ink', name: 'Ink & Brass', note: 'Warm paper, near-black chrome, brass' },
   { id: 'graphite', name: 'Graphite & Green', note: 'Warm stone with forest green' },
   { id: 'slate', name: 'Slate & Teal', note: 'Cool slate with deep teal' },
@@ -180,6 +182,13 @@ export const PALETTES = [
 ];
 
 export const TYPEFACES = [
+  // Both commercial licences (Commercial Type and Klim Type Foundry) this
+  // application has no right to embed. Named rather than bundled, the same
+  // way SF Pro below is: it renders as itself only on a machine that already
+  // has them installed, and falls through to Manrope and IBM Plex Serif --
+  // which is what everyone else actually sees.
+  { id: 'styrene', name: 'Styrene & Tiempos', note: 'A UI face paired with a serif for titles; not bundled' },
+  { id: 'manrope', name: 'Manrope', note: 'Geometric and modern; Fira Code for codes' },
   { id: 'plex', name: 'IBM Plex', note: 'Engineered; Plex Mono for codes' },
   { id: 'source', name: 'Source Sans', note: 'Humanist and warm; JetBrains Mono' },
   { id: 'inter', name: 'Inter', note: 'Neutral, tuned for screens' },
@@ -189,12 +198,10 @@ export const TYPEFACES = [
   // OS for the system font it already has installed instead, the same way
   // every other typeface here already falls back to -apple-system if its
   // own files are somehow missing. Elsewhere it quietly becomes the local
-  // system font (Segoe UI on Windows, and so on), which is why it defaults
-  // on for macOS and stays opt-in everywhere else.
+  // system font (Segoe UI on Windows, and so on) — an opt-in for anyone who
+  // wants their platform's own face rather than a bundled one.
   { id: 'sf-pro', name: 'SF Pro', note: "macOS's own system font; no files bundled" },
 ];
-
-const isMacPlatform = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 const has = (list, id) => list.some((x) => x.id === id);
 
@@ -213,7 +220,7 @@ export const toggleTheme = () => setTheme(state.theme === 'dark' ? 'light' : 'da
 export function setPalette(id) {
   // An unknown value would leave the page with no colour tokens at all, which
   // is a white screen rather than a wrong one -- so fall back rather than trust.
-  const value = has(PALETTES, id) ? id : 'ink';
+  const value = has(PALETTES, id) ? id : 'obsidian';
   state.palette = value;
   document.documentElement.setAttribute('data-palette', value);
   setPref('ui.palette', value);
@@ -221,7 +228,7 @@ export function setPalette(id) {
 }
 
 export function setTypeface(id) {
-  const value = has(TYPEFACES, id) ? id : 'plex';
+  const value = has(TYPEFACES, id) ? id : 'styrene';
   state.typeface = value;
   document.documentElement.setAttribute('data-typeface', value);
   setPref('ui.typeface', value);
@@ -234,8 +241,8 @@ export function setTypeface(id) {
  * another.
  */
 export function initAppearance() {
-  setPalette(getPref('ui.palette', 'ink'));
-  setTypeface(getPref('ui.typeface', isMacPlatform() ? 'sf-pro' : 'plex'));
+  setPalette(getPref('ui.palette', 'obsidian'));
+  setTypeface(getPref('ui.typeface', 'styrene'));
   initTheme();
   setDensity(getPref('ui.density', 'comfortable'));
   const zoom = Number(getPref('ui.zoom', 1)) || 1;

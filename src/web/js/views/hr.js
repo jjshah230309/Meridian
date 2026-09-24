@@ -89,13 +89,13 @@ async function orgChartView(go) {
       h('div.row', {
         style: {
           gap: '9px', padding: '7px 10px', background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: '6px', cursor: 'pointer', maxWidth: '540px',
+          borderRadius: 'var(--radius-sm)', cursor: 'pointer', maxWidth: '540px',
         },
         onclick: () => go(`/record/employee/${e.id}`),
       },
         h('div.avatar', { style: { flex: 'none', width: '24px', height: '24px', fontSize: '10px' } }, fmt.initials(name)),
         h('div', { style: { minWidth: 0, flex: 1 } },
-          h('div', { style: { fontWeight: 550, fontSize: '12.5px' } }, name),
+          h('div', { style: { fontWeight: 500, fontSize: '12.5px' } }, name),
           h('div.muted', { style: { fontSize: '11.5px' } }, [e.title, e.department_name].filter(Boolean).join(' · '))),
         e.total_reports ? h('span.tag', `${e.total_reports} report${e.total_reports === 1 ? '' : 's'}`) : null));
     const kids = e.reports.map((c) => node(c, depth + 1));
@@ -143,7 +143,7 @@ async function timesheetView(route, go) {
       return h('div', {
         style: {
           flex: 1, padding: '9px', textAlign: 'center', border: '1px solid var(--border)',
-          borderRadius: '6px', background: hours ? 'var(--accent-soft)' : 'var(--surface-2)',
+          borderRadius: 'var(--radius-sm)', background: hours ? 'var(--accent-soft)' : 'var(--surface-2)',
         },
       },
         h('div.muted', { style: { fontSize: '11px' } }, new Date(d + 'T00:00:00Z').toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' })),

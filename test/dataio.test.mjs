@@ -15,6 +15,9 @@ import { provisionTenant } from '../src/modules/setup.mjs';
 import { loadServerSecret } from '../src/core/auth.mjs';
 import { freshTenant } from './helpers.mjs';
 import * as dataio from '../src/modules/dataio.mjs';
+import * as entities from '../src/modules/entities.mjs';
+import * as customRecords from '../src/modules/customrecords.mjs';
+import * as platform from '../src/modules/platform.mjs';
 import { Money } from '../src/core/util.mjs';
 import { parseCsv, toCsv, csvValue, sniffDelimiter } from '../src/core/csv.mjs';
 import { zip, unzip, ZipFormatError } from '../src/core/zip.mjs';
@@ -236,6 +239,40 @@ test('readXlsx reads shared strings, rich-text runs, entities, multiple sheets a
   assert.equal(accounts.name, 'Chart of Accounts');
   assert.deepEqual(accounts.headers, ['Account Code', 'Account Name']);
   assert.equal(accounts.rows[0]['Account Code'], '9999', 'a plain numeric-looking header value stays text, same as a CSV cell');
+});
+
+test('a self-closed <si/> shared-string entry does not shift every later string index', () => {
+  // Every other tag in xlsx.mjs handles both <tag>...</tag> and the
+  // self-closing <tag/> form; sharedStrings parsing used to only handle the
+  // former. A bare `<si/>` (an empty shared string -- an unremarkable thing
+  // for a real writer to emit) was silently merged into the entry after it,
+  // leaving the array one entry short and shifting every subsequent index
+  // down by one, so cells referencing later strings resolved to the wrong text.
+  const buf = zip([
+    { name: '[Content_Types].xml', data: '<?xml version="1.0"?><Types/>' },
+    { name: 'xl/workbook.xml', data: `<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>` },
+    { name: 'xl/sharedStrings.xml', data: `<?xml version="1.0"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<si/>
+<si><t>Alpha</t></si>
+<si><t>Beta</t></si>
+</sst>` },
+    { name: 'xl/worksheets/sheet1.xml', data: `<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+<row r="1"><c r="A1" t="inlineStr"><is><t>Col A</t></is></c><c r="B1" t="inlineStr"><is><t>Col B</t></is></c><c r="C1" t="inlineStr"><is><t>Col C</t></is></c></row>
+<row r="2"><c r="A2" t="s"><v>0</v></c><c r="B2" t="s"><v>1</v></c><c r="C2" t="s"><v>2</v></c></row>
+</sheetData></worksheet>` },
+  ]);
+  const { sheets } = readXlsx(buf);
+  const row = sheets[0].rows[0];
+  assert.equal(row['Col A'], '', 'index 0 is the empty self-closed entry');
+  assert.equal(row['Col B'], 'Alpha', 'index 1 must not have absorbed the self-closed entry\'s slot');
+  assert.equal(row['Col C'], 'Beta', 'index 2 must not shift down to where Alpha is');
 });
 
 test('a spreadsheet import goes through the exact same coercion as a CSV one', async () => {
@@ -970,6 +1007,81 @@ test('an imported amount is stored at its face value, not a hundred times it', (
   const item = f.repo.queryOne("SELECT base_price, standard_cost FROM item WHERE tenant_id = :t AND sku = 'IMP-1'");
   assert.equal(item.base_price, Money.parse(49.99));
   assert.equal(item.standard_cost, Money.parse(20));
+});
+
+test('an unparseable amount or quantity is rejected, not silently imported as zero', () => {
+  // Money.parse/Qty.parse are deliberately forgiving -- they collapse
+  // anything they cannot read into 0 rather than failing -- because most
+  // callers already know their input is a real number and just want it
+  // scaled. The import path is different: a garbage cell like "N/A" or "TBD"
+  // in an amount column is a mistake in the source spreadsheet, and used to
+  // sail through as a committed amount of exactly zero instead of a
+  // validation error the person could see and fix.
+  const f = freshTenant();
+  const csv = 'SKU,Name,Type,Price,Cost\nIMP-2,Bad Amount Widget,inventory,N/A,20\n';
+  const validation = dataio.validateImport(f.repo, { record_type: 'item', text: csv });
+  assert.equal(validation.error_count, 1);
+  assert.match(validation.errors[0].message, /not an amount/);
+
+  const csv2 = 'Name,Capacity (hours/day)\nPress line,TBD\n';
+  const validation2 = dataio.validateImport(f.repo, { record_type: 'work_center', text: csv2 });
+  assert.equal(validation2.error_count, 1);
+  assert.match(validation2.errors[0].message, /not a quantity/);
+});
+
+test('a contact imports against the company its row names, even though "contact" has no txn type', () => {
+  // company_id's refFrom points at company_type, a column the row supplies
+  // and that varies per row -- unlike a transaction's entity_id, which is
+  // always driven by the transaction's own fixed type. Resolving refFrom the
+  // same way for both used to leave "contact" (which has no txnType at all)
+  // with no default, failing this on every row with a non-empty Company
+  // column.
+  const f = freshTenant();
+  const customer = f.tx(() => entities.createCustomer(f.repo, { name: 'Acme Co', subsidiary_id: f.subsidiaryId }));
+  const csv = `First Name,Last Name,Company Type,Company\nJo,Diaz,customer,${customer.name}\n`;
+  const validation = dataio.validateImport(f.repo, { record_type: 'contact', text: csv });
+  assert.equal(validation.error_count, 0, JSON.stringify(validation.errors));
+  assert.equal(validation.preview[0].values.company_id, customer.id);
+
+  f.tx(() => dataio.commitImport(f.repo, { record_type: 'contact', text: csv }));
+  const contact = f.repo.queryOne("SELECT * FROM contact WHERE tenant_id = :t AND last_name = 'Diaz'");
+  assert.equal(contact.company_type, 'customer');
+  assert.equal(contact.company_id, customer.id);
+});
+
+test('guessing a record type does not re-describe a custom type per candidate', () => {
+  // Each custom type used to be described (getType + its fields, two
+  // queries) once to list its name, again to score it as a candidate, and a
+  // third time inside matchHeaders scoring the same candidate -- roughly six
+  // queries per type, per sheet. A workbook with several sheets and several
+  // custom types turned "show me the tabs" into hundreds of queries.
+  const f = freshTenant();
+  const N = 6;
+  for (let i = 0; i < N; i++) {
+    const name = `widget_${i}`;
+    f.tx(() => customRecords.createType(f.repo, { name, label: `Widget ${i}` }));
+    f.tx(() => platform.createCustomField(f.repo, {
+      record_type: customRecords.qualified(name), name: 'serial', label: 'Serial', type: 'text',
+    }));
+  }
+
+  let calls = 0;
+  const realPrepare = f.repo.db.$prepare;
+  f.repo.db.$prepare = (sql) => {
+    if (/custom_record_type|custom_field/i.test(sql)) calls++;
+    return realPrepare(sql);
+  };
+  try {
+    dataio.guessRecordType(['Serial', 'Notes'], 'widgets', { repo: f.repo });
+  } finally {
+    f.repo.db.$prepare = realPrepare;
+  }
+  // getType's own id-then-name lookup plus fieldsOfType is three queries per
+  // type, once, and one more to list the type names -- describing any type
+  // more than once per guess (the old ~9 queries/type: once to list its
+  // name, again as a candidate, a third time inside matchHeaders) is the
+  // regression coming back.
+  assert.ok(calls <= N * 3 + 2, `expected roughly ${N * 3} queries against custom type tables, saw ${calls}`);
 });
 
 test('a price column finds the item field it belongs to', () => {

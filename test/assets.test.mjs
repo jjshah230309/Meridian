@@ -72,3 +72,49 @@ test('a disposed asset leaves the register and stops depreciating', () => {
   assert.equal(f.tx(() => assets.runDepreciation(f.repo, { through: '2026-12-31' })).posted, 0);
   assert.throws(() => f.tx(() => assets.disposeAsset(f.repo, asset.id, { disposal_date: '2026-08-01' })), /already disposed/);
 });
+
+test('one subsidiary/date group failing does not roll back a different group already posted', () => {
+  // runDepreciation used to post every due group inside one transaction, so
+  // a group whose expense account went inactive after the schedule was set
+  // up rolled back groups this same run had already posted for a different
+  // month, even though nothing was wrong with them.
+  const f = freshTenant();
+  const classA = f.tx(() => f.repo.insert('asset_class', {
+    id: ulid(), name: 'Laptops', method: 'STRAIGHT_LINE', life_months: 36,
+    salvage_pct: 0, declining_rate: 2,
+    asset_account_id: num(f, '1500'), accum_account_id: num(f, '1590'), expense_account_id: num(f, '6800'),
+    created_at: nowIso(),
+  }));
+  const classB = f.tx(() => f.repo.insert('asset_class', {
+    id: ulid(), name: 'Fixtures', method: 'STRAIGHT_LINE', life_months: 36,
+    salvage_pct: 0, declining_rate: 2,
+    asset_account_id: num(f, '1500'), accum_account_id: num(f, '1590'), expense_account_id: num(f, '6100'),
+    created_at: nowIso(),
+  }));
+  const good = f.tx(() => assets.createAsset(f.repo, {
+    name: 'Good asset', class_id: classA, subsidiary_id: f.subsidiaryId,
+    cost: 3600, acquisition_date: '2026-01-15', in_service_date: '2026-01-15',
+  }));
+  const bad = f.tx(() => assets.createAsset(f.repo, {
+    name: 'Bad asset', class_id: classB, subsidiary_id: f.subsidiaryId,
+    cost: 3600, acquisition_date: '2026-02-15', in_service_date: '2026-02-15',
+  }));
+  f.tx(() => assets.placeInService(f.repo, good.id, { in_service_date: '2026-01-15' }));
+  f.tx(() => assets.placeInService(f.repo, bad.id, { in_service_date: '2026-02-15' }));
+
+  // The bad asset's expense account goes inactive after both schedules exist.
+  f.tx(() => f.repo.update('account', num(f, '6100'), { active: 0 }));
+
+  // Not wrapped in f.tx(): runDepreciation commits each group in its own
+  // transaction on purpose, and wrapping this call would turn those back
+  // into savepoints and undo the isolation this test is checking for.
+  assert.throws(() => assets.runDepreciation(f.repo, { through: '2026-02-28' }), /inactive/);
+
+  assert.equal(balance(f, num(f, '6800')), Money.parse(100), 'the good asset must still have posted its January depreciation');
+  const goodLine = f.repo.queryOne(
+    'SELECT * FROM depreciation_line WHERE tenant_id = :t AND asset_id = ? AND depr_date = ?', [good.id, '2026-01-31']);
+  assert.equal(goodLine.posted, 1);
+  const badLine = f.repo.queryOne(
+    'SELECT * FROM depreciation_line WHERE tenant_id = :t AND asset_id = ? AND depr_date = ?', [bad.id, '2026-02-28']);
+  assert.equal(badLine.posted, 0, 'the failing group must not have posted');
+});

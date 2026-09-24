@@ -256,12 +256,18 @@ export function runRecognition(repo, { kind = 'revenue', through = today(), dry_
       if (!r.amount) continue;
       const seg = { department_id: r.department_id, class_id: r.class_id, item_id: r.item_id, entity_type: r.entity_type, entity_id: r.entity_id };
       const label = `${r.schedule_no} ${r.schedule_memo}`.trim();
+      // Each row carries its own base_amount, booked at that schedule's own
+      // rate -- which can differ from another schedule's in the same group.
+      // Setting it here explicitly (postJournal honours a line's own
+      // base_debit/base_credit) is what lets one journal entry hold several
+      // schedules correctly, instead of converting all of them at whichever
+      // schedule happened to be first in the group.
       if (kind === 'revenue') {
-        journalLines.push({ account_id: r.deferral_account_id, debit: r.amount, credit: 0, ...seg, memo: `Deferred revenue released — ${label}` });
-        journalLines.push({ account_id: r.target_account_id, debit: 0, credit: r.amount, ...seg, memo: `Revenue recognised — ${label}` });
+        journalLines.push({ account_id: r.deferral_account_id, debit: r.amount, credit: 0, base_debit: r.base_amount, base_credit: 0, ...seg, memo: `Deferred revenue released — ${label}` });
+        journalLines.push({ account_id: r.target_account_id, debit: 0, credit: r.amount, base_debit: 0, base_credit: r.base_amount, ...seg, memo: `Revenue recognised — ${label}` });
       } else {
-        journalLines.push({ account_id: r.target_account_id, debit: r.amount, credit: 0, ...seg, memo: `Amortisation — ${label}` });
-        journalLines.push({ account_id: r.deferral_account_id, debit: 0, credit: r.amount, ...seg, memo: `Prepayment released — ${label}` });
+        journalLines.push({ account_id: r.target_account_id, debit: r.amount, credit: 0, base_debit: r.base_amount, base_credit: 0, ...seg, memo: `Amortisation — ${label}` });
+        journalLines.push({ account_id: r.deferral_account_id, debit: 0, credit: r.amount, base_debit: 0, base_credit: r.base_amount, ...seg, memo: `Prepayment released — ${label}` });
       }
     }
     if (journalLines.length < 2) continue;

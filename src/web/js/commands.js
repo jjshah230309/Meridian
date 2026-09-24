@@ -89,7 +89,7 @@ export function registerCommands() {
       subtitle: 'search every screen and action', run: () => shortcuts.openPalette(),
     },
     {
-      id: 'app.search', title: 'Search records', icon: 'search', keys: 'slash', group: 'Application',
+      id: 'app.search', title: 'Search records', icon: 'search', keys: '/', group: 'Application',
       subtitle: 'customers, invoices, items', run: () => document.querySelector('.searchbox input')?.focus(),
     },
     {
@@ -127,7 +127,7 @@ export function registerCommands() {
     },
     {
       id: 'view.palette', title: 'Next colour scheme', icon: 'eye', group: 'View',
-      subtitle: 'ink, graphite, slate, midnight',
+      subtitle: store.PALETTES.map((p) => p.name).join(', '),
       run: () => {
         const ids = store.PALETTES.map((p) => p.id);
         const next = ids[(ids.indexOf(store.state.palette) + 1) % ids.length];
@@ -138,7 +138,7 @@ export function registerCommands() {
     },
     {
       id: 'view.typeface', title: 'Next typeface', icon: 'file-text', group: 'View',
-      subtitle: 'Plex, Source Sans, Inter, Plex Serif',
+      subtitle: store.TYPEFACES.map((t) => t.name).join(', '),
       run: () => {
         const ids = store.TYPEFACES.map((t) => t.id);
         const next = ids[(ids.indexOf(store.state.typeface) + 1) % ids.length];

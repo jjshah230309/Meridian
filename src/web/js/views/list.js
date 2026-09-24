@@ -35,7 +35,7 @@ export async function listView(route, { go }) {
 
   const countEl = h('span.result-count');
   const body = h('div.grid-wrap', loading());
-  const searchInput = h('input', { type: 'search', placeholder: `Search ${meta.plural.toLowerCase()}…`, value: state.q, style: { width: '210px' } });
+  const searchInput = h('input', { type: 'search', placeholder: `Search ${meta.plural.toLowerCase()}…`, value: state.q, style: { width: '240px' } });
   const pager = h('div.row', { style: { gap: '4px' } });
 
   const persist = () => store.setPref(prefKey, { columns: state.columns, filters: state.filters, sort: state.sort, limit: state.limit });
@@ -84,7 +84,7 @@ export async function listView(route, { go }) {
         const isNum = ['money', 'number', 'percent', 'qty'].includes(f.type);
         return h('td', { class: isNum ? 'num' : '' },
           c === meta.title || c === 'name' || c === 'txn_no'
-            ? h('span', { style: { fontWeight: 550 } }, displayValue(f, value, row))
+            ? h('span', { style: { fontWeight: 500 } }, displayValue(f, value, row))
             : displayValue(f, value, row));
       })))));
 
@@ -223,30 +223,31 @@ export async function listView(route, { go }) {
   }
 
   const toolbar = h('div.toolbar',
-    searchInput,
-    mine.length ? savedSel : null,
-    h('button.btn.sm', { onclick: openFilters }, '⚟ Filters', state.filters.length ? h('span.tag.blue', String(state.filters.length)) : null),
-    h('button.btn.sm', { onclick: openColumns }, icon('table', { size: 13 }), 'Columns'),
-    h('div.spacer'),
-    countEl,
-    h('select', {
-      style: { width: '76px' }, title: 'Rows per page',
-      onchange: (e) => { state.limit = Number(e.target.value); state.offset = 0; persist(); load(); },
-    }, ...PAGE_SIZES.map((n) => h('option', { value: n, selected: n === state.limit }, String(n)))),
-    h('button.btn.sm', { onclick: saveCurrentSearch, title: 'Save this filter and column set' }, '☆ Save view'),
-    h('div.row', { style: { gap: '4px' } },
-      h('button.btn.sm', { onclick: () => API.exportCsv(type, { columns: state.columns, filters: state.filters, sort: state.sort }).catch(notifyError) }, icon('download', { size: 13 }), 'CSV'),
-      h('button.btn.sm', { onclick: () => API.exportFile(type, 'pdf', { columns: state.columns, filters: state.filters, sort: state.sort }).catch(notifyError) }, 'PDF')));
+    h('div.row', { style: { gap: '8px', flex: 1 } },
+      searchInput,
+      mine.length ? savedSel : null,
+      h('button.btn.sm', { onclick: openFilters }, icon('sliders', { size: 13 }), 'Filters', state.filters.length ? h('span.badge.accent', String(state.filters.length)) : null),
+      h('button.btn.sm', { onclick: openColumns }, icon('table', { size: 13 }), 'Columns')),
+    h('div.row', { style: { gap: '8px', alignItems: 'center' } },
+      countEl,
+      h('select', {
+        style: { width: '76px' }, title: 'Rows per page',
+        onchange: (e) => { state.limit = Number(e.target.value); state.offset = 0; persist(); load(); },
+      }, ...PAGE_SIZES.map((n) => h('option', { value: n, selected: n === state.limit }, String(n)))),
+      h('button.btn.sm', { onclick: saveCurrentSearch, title: 'Save this filter and column set' }, icon('bookmark', { size: 13 }), 'Save view'),
+      h('div.row', { style: { gap: '4px' } },
+        h('button.btn.sm', { onclick: () => API.exportCsv(type, { columns: state.columns, filters: state.filters, sort: state.sort }).catch(notifyError) }, icon('download', { size: 13 }), 'CSV'),
+        h('button.btn.sm', { onclick: () => API.exportFile(type, 'pdf', { columns: state.columns, filters: state.filters, sort: state.sort }).catch(notifyError) }, 'PDF'))));
 
-  const el = h('div.page.flush',
-    h('div', { style: { padding: '16px 20px 0' } },
-      h('div.page-head',
-        h('div.titles', h('h1', meta.plural), h('div.page-sub', describeFilters(state, fm))),
-        h('div.page-actions',
-          extraActions(type, go),
-          store.can(type, store.LEVEL.CREATE) && h('button.btn.primary', { onclick: newRecord }, icon('plus', { size: 14 }), `New ${meta.label.toLowerCase()}`)))),
-    h('div.card', { style: { margin: '0 20px 24px' } },
-      toolbar, body,
+  const el = h('div.page',
+    h('div.page-head',
+      h('div.titles', h('h1', meta.plural), h('div.page-sub', describeFilters(state, fm))),
+      h('div.page-actions',
+        extraActions(type, go),
+        store.can(type, store.LEVEL.CREATE) && h('button.btn.primary', { onclick: newRecord }, icon('plus', { size: 14 }), `New ${meta.label.toLowerCase()}`))),
+    h('div.card',
+      toolbar,
+      body,
       h('div.card-foot', pager)));
 
   load();

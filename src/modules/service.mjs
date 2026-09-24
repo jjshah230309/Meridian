@@ -173,7 +173,10 @@ export function addLines(repo, id, lines = []) {
       const quantity = Qty.parse(l.quantity ?? 1);
       const item = l.item_id ? repo.get('item', l.item_id) : null;
       const unitPrice = Money.parse(l.unit_price ?? Money.toNumber(item?.base_price ?? 0));
-      let unitCost = Money.parse(l.unit_cost ?? item?.standard_cost ?? 0);
+      // item.standard_cost is already minor units, same as item.base_price
+      // above -- passing it straight into Money.parse (which expects major
+      // units) scales it up by 100x for any line that doesn't override cost.
+      let unitCost = Money.parse(l.unit_cost ?? Money.toNumber(item?.standard_cost ?? 0));
 
       // Contract coverage: parts_labour covers both, parts_only covers parts.
       const covered = contract && contract.status === 'active'

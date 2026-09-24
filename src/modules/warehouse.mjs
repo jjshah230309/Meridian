@@ -280,6 +280,7 @@ export function createWave(repo, { location_id, txn_ids = [], strategy = 'batch'
           repo.insert('pick_task', {
             id: ulid(), wave_id: id, txn_id: order.id, txn_line_id: l.id,
             item_id: l.item_id, bin_id: src.bin_id, lot_number: src.lot_number || '',
+            serial_no: src.serial_no || '',
             quantity: take, quantity_picked: 0, pick_sequence: src.pick_sequence || 0,
             status: 'pending', picked_by: null, picked_at: null,
           });
@@ -327,13 +328,14 @@ export function confirmPick(repo, taskId, { quantity = null, by = null } = {}) {
       if (picked > 0) {
         moveBin(repo, {
           item_id: task.item_id, from_bin_id: task.bin_id,
-          to_bin_id: staging?.id || null, quantity: Qty.toNumber(picked), lot_number: task.lot_number,
+          to_bin_id: staging?.id || null, quantity: Qty.toNumber(picked),
+          lot_number: task.lot_number, serial_no: task.serial_no,
         });
       }
       repo.exec(
         `UPDATE bin_quantity SET allocated = MAX(0, allocated - ?)
-         WHERE tenant_id = :t AND bin_id = ? AND item_id = ? AND lot_number = ?`,
-        [task.quantity, task.bin_id, task.item_id, task.lot_number]);
+         WHERE tenant_id = :t AND bin_id = ? AND item_id = ? AND lot_number = ? AND serial_no = ?`,
+        [task.quantity, task.bin_id, task.item_id, task.lot_number, task.serial_no || '']);
     }
     repo.update('pick_task', taskId, {
       quantity_picked: picked,
@@ -396,9 +398,13 @@ export function shipWave(repo, waveId, { txn_date = today(), carrier = '', track
     'SELECT DISTINCT txn_id FROM pick_task WHERE tenant_id = :t AND wave_id = ? AND quantity_picked > 0', [waveId])
     .map((r) => r.txn_id))];
 
-  return repo.tx(() => {
-    const fulfilments = [];
-    for (const orderId of orderIds) {
+  // Each order's fulfilment is its own transaction, so one order failing (a
+  // line amended to less than what was picked, say, in the gap between
+  // picking and shipping) cannot roll back fulfilments this same call
+  // already completed for other, unrelated orders in the wave.
+  const fulfilments = [];
+  for (const orderId of orderIds) {
+    repo.tx(() => {
       const tasks = repo.query(
         'SELECT * FROM pick_task WHERE tenant_id = :t AND wave_id = ? AND txn_id = ? AND quantity_picked > 0', [waveId, orderId]);
       const byLine = new Map();
@@ -410,7 +416,9 @@ export function shipWave(repo, waveId, { txn_date = today(), carrier = '', track
       fulfilments.push({ id: ful.id, txn_no: ful.txn_no });
       repo.exec('UPDATE package SET txn_id = ?, status = \'shipped\', shipped_at = ?, carrier = COALESCE(NULLIF(carrier, \'\'), ?), tracking_no = COALESCE(NULLIF(tracking_no, \'\'), ?) WHERE tenant_id = :t AND wave_id = ? AND (txn_id = ? OR txn_id IS NULL)',
         [ful.id, nowIso(), carrier, tracking_no, waveId, orderId]);
-    }
+    });
+  }
+  return repo.tx(() => {
     repo.update('pick_wave', waveId, { status: 'shipped', completed_at: nowIso() });
     audit.record(repo, { recordType: 'pick_wave', recordId: waveId, action: 'ship' });
     return { wave: getWave(repo, waveId), fulfilments };

@@ -258,7 +258,7 @@ export function registerDataRoutes(r, P) {
       const where = ['r.tenant_id = :t'];
       const params = [];
       if (m.txnType) { where.push('r.type = ?'); params.push(m.txnType); }
-      const rowFilter = rbac.rowFilter(ctx.access, m.table, { alias: 'r' });
+      const rowFilter = rbac.rowFilter(ctx.access, m.table, { alias: 'r', db: ctx.repo.db });
       if (rowFilter?.sql) { where.push(rowFilter.sql); params.push(...(rowFilter.params || [])); }
       rows = ctx.repo.query(
         `SELECT r.* FROM ${m.table} r WHERE ${where.join(' AND ')} ORDER BY r.${m.defaultSort || 'id'} LIMIT ?`,

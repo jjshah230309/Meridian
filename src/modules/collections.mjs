@@ -94,6 +94,7 @@ function openItems(repo, { as_of, customer_id = null, subsidiary_id = null, curr
 export function worklist(repo, { as_of = today(), collector_id = null, subsidiary_id = null, min_days = 1, include_current = false } = {}) {
   if (!isValidDate(as_of)) throw new ValidationError({ as_of: 'Enter a valid date' });
   const reporting = reportingCurrency(repo);
+  const rateTo = converter(repo, reporting, as_of);
   const items = openItems(repo, { as_of, subsidiary_id, currency: reporting });
   const byCustomer = new Map();
   for (const i of items) {
@@ -140,8 +141,11 @@ export function worklist(repo, { as_of = today(), collector_id = null, subsidiar
       last_notice_level: notice?.level_no || 0,
       documents: own.length, oldest_days: oldest,
       buckets, total, overdue,
-      // Over the limit is a different conversation from merely late.
-      over_limit: c.credit_limit > 0 && total > c.credit_limit,
+      // Over the limit is a different conversation from merely late. `total`
+      // is already in the reporting currency (openItems converted it); the
+      // customer's own credit_limit is stored in their currency, so it needs
+      // the same conversion before the two are comparable.
+      over_limit: c.credit_limit > 0 && total > Money.convert(c.credit_limit, rateTo(c.currency)),
     });
   }
 

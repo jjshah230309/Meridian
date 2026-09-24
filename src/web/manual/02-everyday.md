@@ -144,12 +144,13 @@ want to spend eight hours in. Everything here is stored per person on this
 computer, so two people sharing a machine get their own, and none of it
 touches your company's data.
 
-**Colour scheme** — four of them, and they are complete palettes rather than
+**Colour scheme** — five of them, and they are complete palettes rather than
 tints:
 
 | | |
 | --- | --- |
-| **Ink & Brass** | Warm paper, near-black chrome, brass. The default. |
+| **Carbon & Cobalt** | Cool graphite chrome, vivid cobalt accent. The default. |
+| **Ink & Brass** | Warm paper, near-black chrome, brass. |
 | **Graphite & Green** | Warm stone with a forest green. |
 | **Slate & Teal** | Cool slate with a deep teal. |
 | **Midnight & Indigo** | Drawn for dark, with a light cut derived from it. |
@@ -158,26 +159,28 @@ Each has its own light and dark version, so the colour scheme and the
 **theme** below it are separate choices — the green palette in dark mode is a
 thing you can have.
 
-In all four, the sidebar and top bar are dark and the page is not. That is
+In all five, the sidebar and top bar are dark and the page is not. That is
 deliberate: it stops the navigation competing with the numbers for your
 attention, and it is most of why the application reads as an instrument
 rather than a web page.
 
-**Typeface** — five pairings:
+**Typeface** — seven pairings:
 
 | | |
 | --- | --- |
-| **IBM Plex** | Engineered and slightly technical, with Plex Mono for account codes and SKUs. The default outside macOS. |
+| **Styrene & Tiempos** | Styrene for the interface, Tiempos for titles. The default. Meridian has no licence to bundle either, so this names them and falls back to Manrope and Plex Serif on a machine that does not have them installed, which in practice is most machines. |
+| **Manrope** | Geometric and modern, paired with Fira Code for account codes and SKUs. |
+| **IBM Plex** | Engineered and slightly technical, with Plex Mono for account codes and SKUs. |
 | **Source Sans** | Humanist and warmer, paired with JetBrains Mono. |
 | **Inter** | Neutral, drawn for screens, very steady at small sizes. |
-| **Plex Serif titles** | Serif page titles and headline figures over the same sans body. The most distinctive of the five. |
-| **SF Pro** | macOS's own system font. The default there — not a font Meridian ships, but the copy already on the Mac, so it always matches whatever build of it the OS itself is running. On anything else it quietly becomes that platform's own interface font instead. |
+| **Plex Serif titles** | Serif page titles and headline figures over the same sans body. |
+| **SF Pro** | macOS's own system font — not a font Meridian ships, but the copy already on the Mac, so it always matches whatever build of it the OS itself is running. On anything else it quietly becomes that platform's own interface font instead. |
 
-The first four ship inside the application, so they work with no network and
-tell nobody outside this machine that you opened the books. Each brings its
-own type scale — the same pixel size reads differently in different
-families, so picking a typeface adjusts the sizes with it rather than
-leaving the others slightly wrong.
+All but Styrene & Tiempos and SF Pro ship inside the application, so they work with no
+network and tell nobody outside this machine that you opened the books.
+Each brings its own type scale — the same pixel size reads differently in
+different families, so picking a typeface adjusts the sizes with it rather
+than leaving the others slightly wrong.
 
 **Density** is worth trying: compact fits about a third more rows on a screen
 without hiding anything.

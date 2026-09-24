@@ -38,6 +38,8 @@ const FAMILIES = [
   { family: 'Source Sans 3', weights: [400, 500, 600], slug: 'source-sans' },
   { family: 'JetBrains Mono', weights: [400, 500], slug: 'jetbrains-mono' },
   { family: 'Inter', weights: [400, 500, 600], slug: 'inter' },
+  { family: 'Manrope', weights: [400, 500, 600], slug: 'manrope' },
+  { family: 'Fira Code', weights: [400, 500, 600], slug: 'fira-code' },
 ];
 
 const log = (...a) => console.log('·', ...a);
@@ -129,6 +131,8 @@ SIL Open Font License, Version 1.1.
   Source Sans 3                                 (c) Adobe
   JetBrains Mono                                (c) JetBrains s.r.o.
   Inter                                         (c) The Inter Project Authors
+  Manrope                                       (c) Mikhail Sharanda
+  Fira Code                                     (c) The Fira Code Project Authors
 
 The full licence text is available at https://openfontlicense.org and is
 reproduced in each project's own repository. In summary, the OFL permits the

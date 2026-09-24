@@ -306,7 +306,7 @@ export function updateRecord(repo, type, id, body = {}) {
   // field already filled in does not suddenly complain.
   const errors = validateColumns(d, { ...before, ...columns });
   if (Object.keys(errors).length) throw new ValidationError(errors);
-  const merged = platform.validateCustom(repo, qualified(bareName(type)), { ...(before.custom || {}), ...custom });
+  const merged = { ...(before.custom || {}), ...platform.validateCustom(repo, qualified(bareName(type)), custom, { partial: true }) };
 
   const values = { updated_at: nowIso(), custom: merged };
   if ('name' in columns) values.name = columns.name || '';

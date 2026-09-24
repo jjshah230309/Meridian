@@ -244,16 +244,24 @@ export function generate(repo, { through = today(), id = null, dry_run = false }
   const templates = id ? [repo.get('recurring_journal', id)].filter(Boolean) : due(repo, { through });
   if (id && !templates.length) throw notFound('Recurring journal not found');
 
-  return repo.tx(() => {
-    const posted = [];
-    const skipped = [];
-    let count = 0;
+  const posted = [];
+  const skipped = [];
+  let count = 0;
 
-    for (const t of templates) {
-      if (t.status !== 'active') { skipped.push({ name: t.name, date: t.next_date, reason: `it is ${t.status}` }); continue; }
-      const lines = linesFor(repo, t.id);
-      if (lines.length < 2) { skipped.push({ name: t.name, date: t.next_date, reason: 'it has no balanced lines' }); continue; }
+  for (const t of templates) {
+    if (t.status !== 'active') { skipped.push({ name: t.name, date: t.next_date, reason: `it is ${t.status}` }); continue; }
+    const lines = linesFor(repo, t.id);
+    if (lines.length < 2) { skipped.push({ name: t.name, date: t.next_date, reason: 'it has no balanced lines' }); continue; }
 
+    // Each template's occurrences and its own next_date/occurrences update
+    // are one atomic unit -- a crash between the last posting and that
+    // update must not leave the template ready to post the same occurrence
+    // again. That unit stops at one template on purpose: a dry run writes
+    // nothing and must not take a write lock for it, and a real run must not
+    // let one bad template (a deleted account, a closed period appearing
+    // mid-loop) roll back postings this same call already committed for a
+    // different template.
+    const runTemplate = () => {
       let cursor = t.next_date;
       let occurrences = t.occurrences;
       let lastRun = t.last_run_date;
@@ -324,18 +332,20 @@ export function generate(repo, { through = today(), id = null, dry_run = false }
           status: ended ? 'ended' : t.status, updated_at: nowIso(),
         });
       }
-    }
-
-    if (!dry_run && posted.length) {
-      audit.record(repo, {
-        recordType: 'recurring_journal', recordId: id, action: 'generate',
-        changes: { through: { from: null, to: through }, entries: { from: 0, to: posted.length } },
-      });
-    }
-    return {
-      through, dry_run: !!dry_run, generated: count,
-      amount: posted.reduce((a, p) => a + p.amount, 0),
-      posted, skipped,
     };
-  });
+
+    if (dry_run) runTemplate(); else repo.tx(runTemplate);
+  }
+
+  if (!dry_run && posted.length) {
+    audit.record(repo, {
+      recordType: 'recurring_journal', recordId: id, action: 'generate',
+      changes: { through: { from: null, to: through }, entries: { from: 0, to: posted.length } },
+    });
+  }
+  return {
+    through, dry_run: !!dry_run, generated: count,
+    amount: posted.reduce((a, p) => a + p.amount, 0),
+    posted, skipped,
+  };
 }

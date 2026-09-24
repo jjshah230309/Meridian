@@ -57,8 +57,19 @@ export function importStatement(repo, bankAccountId, lines, { source = 'manual' 
     return { l, date, amount, externalId };
   });
 
-  const existingIds = new Set(repo.query(`SELECT external_id FROM bank_txn WHERE tenant_id = :t AND bank_account_id = ? AND external_id IN (${linesWithIds.map(() => '?').join(',')})`,
-    [bankAccountId, ...linesWithIds.map((x) => x.externalId)]).map((r) => r.external_id));
+  // Chunked, since a large statement's line count can exceed the bound
+  // parameter limit of one IN (...) clause.
+  const existingIds = new Set();
+  const allExternalIds = linesWithIds.map((x) => x.externalId);
+  const CHUNK = 500;
+  for (let i = 0; i < allExternalIds.length; i += CHUNK) {
+    const chunk = allExternalIds.slice(i, i + CHUNK);
+    if (!chunk.length) continue;
+    for (const row of repo.query(
+      `SELECT external_id FROM bank_txn WHERE tenant_id = :t AND bank_account_id = ? AND external_id IN (${chunk.map(() => '?').join(',')})`,
+      [bankAccountId, ...chunk],
+    )) existingIds.add(row.external_id);
+  }
 
   for (const { l, date, amount, externalId } of linesWithIds) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped++; continue; }
@@ -69,6 +80,13 @@ export function importStatement(repo, bankAccountId, lines, { source = 'manual' 
       description: String(l.description || '').slice(0, 400), reference: String(l.reference || '').slice(0, 100),
       amount, status: 'unmatched', external_id: externalId, imported_at: now,
     });
+    // A line without its own external_id falls back to a date/amount/
+    // description key, so two genuinely duplicate lines within the SAME
+    // upload compute the same key. `existingIds` was only a snapshot of
+    // what the database had before this call started; without adding to it
+    // here, the second line would not be seen as a duplicate of the first
+    // and would collide on bank_txn's unique index, failing the whole import.
+    existingIds.add(externalId);
     imported++;
   }
   audit.record(repo, { recordType: 'bank_txn', recordId: bankAccountId, action: 'import', changes: { imported: { from: null, to: imported }, skipped: { from: null, to: skipped }, source: { from: null, to: source } } });

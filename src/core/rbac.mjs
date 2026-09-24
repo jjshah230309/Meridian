@@ -121,25 +121,49 @@ export function require$(access, recordType, needed) {
  * Returns { sql, params } where sql begins with ' AND ...' or is ''.
  * `alias` lets callers apply it to a joined table.
  */
-export function rowFilter(access, table, { alias = '', ownerColumn = 'owner_id' } = {}) {
+// Which column identifies "mine" for a table's own-only restriction. Shared
+// between rowFilter (the SQL-level filter) and canSeeRow (the single-row,
+// post-fetch check) so the two can never disagree about who owns a row --
+// they used to: canSeeRow only ever looked at owner_id/assigned_to/created_by,
+// so a table like time_entry or time_off (owned by employee_id, with none of
+// those three columns) always passed canSeeRow no matter whose it was, even
+// though the list view's SQL filter correctly restricted it.
+const OWNER_COL = {
+  customer: 'owner_id', lead: 'owner_id', opportunity: 'owner_id', activity: 'owner_id',
+  support_case: 'assigned_to', txn: 'created_by', time_entry: 'employee_id', time_off: 'employee_id',
+};
+
+// Fallback allowlist for callers that cannot pass a `db` (unit tests
+// exercising rowFilter directly). Every real call site passes `db`, which
+// asks the live schema instead -- this hand-maintained list drifted from the
+// schema before (see the `db` branch below) and is kept only for that case.
+const DIMENSION_COLS_FALLBACK = {
+  txn: ['subsidiary_id', 'location_id', 'department_id', 'class_id'],
+  journal_entry: ['subsidiary_id'],
+  journal_line: ['department_id', 'location_id', 'class_id'],
+  customer: ['subsidiary_id'], vendor: ['subsidiary_id'], employee: ['subsidiary_id', 'department_id', 'location_id'],
+  location: ['subsidiary_id'], item: [], opportunity: ['subsidiary_id'], account: ['subsidiary_id'],
+  time_entry: ['department_id'], payroll_run: ['subsidiary_id'],
+};
+
+export function rowFilter(access, table, { alias = '', ownerColumn = 'owner_id', db = null } = {}) {
   if (!access || access.isOwner) return { sql: '', params: [] };
   const p = alias ? `${alias}.` : '';
   const parts = []; const params = [];
   const COLUMN_FOR = { subsidiary: 'subsidiary_id', department: 'department_id', location: 'location_id', class: 'class_id' };
-  const HAS = {
-    txn: ['subsidiary_id', 'location_id', 'department_id', 'class_id'],
-    journal_entry: ['subsidiary_id'],
-    journal_line: ['department_id', 'location_id', 'class_id'],
-    customer: ['subsidiary_id'], vendor: ['subsidiary_id'], employee: ['subsidiary_id', 'department_id', 'location_id'],
-    location: ['subsidiary_id'], item: [], opportunity: ['subsidiary_id'], account: ['subsidiary_id'],
-    time_entry: ['department_id'], payroll_run: ['subsidiary_id'],
-  };
-  const cols = HAS[table] || [];
+  // Whether `table` actually carries this dimension's column -- read from the
+  // live schema when possible. A hand-maintained allowlist here used to fall
+  // behind the schema, so a subsidiary/department/location/class restriction
+  // silently did nothing on any table someone forgot to add to the list,
+  // even though the single-row canSeeRow check (which reads the row itself)
+  // enforced it correctly -- the two only need to agree once this reads the
+  // same source of truth canSeeRow already does.
+  const hasCol = (col) => (db ? db.$hasColumn(table, col) : (DIMENSION_COLS_FALLBACK[table] || []).includes(col));
 
   for (const [dim, r] of Object.entries(access.restrictions || {})) {
     if (dim === 'owner') continue;
     const col = COLUMN_FOR[dim];
-    if (!col || !cols.includes(col) || !r.allowed) continue;
+    if (!col || !hasCol(col) || !r.allowed) continue;
     const ids = [...r.allowed];
     if (!ids.length) { parts.push('0=1'); continue; }
     // NULL means "unassigned/shared" and stays visible; restrictions scope
@@ -149,14 +173,15 @@ export function rowFilter(access, table, { alias = '', ownerColumn = 'owner_id' 
   }
 
   const own = access.restrictions?.owner;
-  if (own?.ownOnly && access.user?.id) {
-    const OWNER_COL = {
-      customer: 'owner_id', lead: 'owner_id', opportunity: 'owner_id', activity: 'owner_id',
-      support_case: 'assigned_to', txn: 'created_by', time_entry: 'employee_id',
-    };
+  if (own?.ownOnly && access.user) {
     const col = OWNER_COL[table] || ownerColumn;
-    if (table === 'time_entry' && access.user.employee_id) { parts.push(`${p}${col} = ?`); params.push(access.user.employee_id); }
-    else { parts.push(`${p}${col} = ?`); params.push(access.user.id); }
+    if (col === 'employee_id') {
+      // An app user who isn't linked to an employee record owns nothing here.
+      if (access.user.employee_id) { parts.push(`${p}${col} = ?`); params.push(access.user.employee_id); }
+      else { parts.push('0=1'); }
+    } else if (access.user.id) {
+      parts.push(`${p}${col} = ?`); params.push(access.user.id);
+    }
   }
   return { sql: parts.length ? ' AND ' + parts.join(' AND ') : '', params };
 }
@@ -174,9 +199,14 @@ export function canSeeRow(access, table, row) {
   }
   const own = access.restrictions?.owner;
   if (own?.ownOnly) {
-    const candidates = [row.owner_id, row.assigned_to, row.created_by].filter(Boolean);
-    if (candidates.length && !candidates.includes(access.user?.id)) {
+    // Same column rowFilter would have used for this table -- a row that
+    // passes the SQL-level filter must pass this check too, and vice versa.
+    const col = OWNER_COL[table] || 'owner_id';
+    if (col === 'employee_id') {
       if (!(row.employee_id && row.employee_id === access.user?.employee_id)) return false;
+    } else {
+      const v = row[col];
+      if (v !== null && v !== undefined && v !== access.user?.id) return false;
     }
   }
   return true;

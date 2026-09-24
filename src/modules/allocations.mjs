@@ -229,7 +229,7 @@ function sourceBalance(repo, schedule, { from, to }) {
   for (const s of sources) {
     const where = ['jl.account_id = ?', 'je.status = \'posted\'', 'je.subsidiary_id = ?', 'je.txn_date <= ?'];
     const params = [s.account_id, schedule.subsidiary_id, to];
-    const since = schedule.basis === 'period' ? from : windowStart(schedule);
+    const since = sinceFor(schedule, from);
     if (since) { where.push('je.txn_date >= ?'); params.push(since); }
     if (s.department_id) { where.push('jl.department_id = ?'); params.push(s.department_id); }
     if (s.class_id) { where.push('jl.class_id = ?'); params.push(s.class_id); }
@@ -247,24 +247,34 @@ function sourceBalance(repo, schedule, { from, to }) {
   return out;
 }
 
+/** The window a schedule measures over: the period itself, or everything
+ * since it last ran. Shared by sourceBalance and weightsFor so the pool
+ * being divided and the weights it is divided by are always read over the
+ * same window. */
+const sinceFor = (schedule, from) => (schedule.basis === 'period' ? from : windowStart(schedule));
+
 /** The weights to divide by, and where they came from. */
 function weightsFor(repo, schedule, targets, { from, to }) {
   if (schedule.method === 'fixed') {
     return targets.map((t) => ({ target: t, weight: t.weight, label: `weight ${t.weight}` }));
   }
+  const since = sinceFor(schedule, from);
   return targets.map((t) => {
     // A statistical balance is a count, posted as a debit. Its sign is
     // meaningless as an amount and its magnitude is the whole point.
+    //
+    // Bounded to this schedule's own window, the same as sourceBalance --
+    // postStatistic posts a reading ("this month's headcount"), not a delta,
+    // so summing every reading ever posted (with no lower bound) would keep
+    // adding this month's count onto every month that came before it.
+    const where = ['jl.account_id = ?', "je.status = 'posted'", 'je.subsidiary_id = ?', 'je.txn_date <= ?'];
+    const params = [t.statistical_account_id, schedule.subsidiary_id, to];
+    if (since) { where.push('je.txn_date >= ?'); params.push(since); }
+    if (t.department_id) { where.push('jl.department_id = ?'); params.push(t.department_id); }
     const measured = repo.scalar(
       `SELECT COALESCE(SUM(jl.base_debit - jl.base_credit), 0) v
        FROM journal_line jl JOIN journal_entry je ON je.tenant_id = jl.tenant_id AND je.id = jl.entry_id
-       WHERE jl.tenant_id = :t AND jl.account_id = ? AND je.status = 'posted'
-         AND je.subsidiary_id = ? AND je.txn_date <= ?
-         ${t.department_id ? 'AND jl.department_id = ?' : ''}`,
-      t.department_id
-        ? [t.statistical_account_id, schedule.subsidiary_id, to, t.department_id]
-        : [t.statistical_account_id, schedule.subsidiary_id, to],
-      0);
+       WHERE jl.tenant_id = :t AND ${where.join(' AND ')}`, params, 0);
     return {
       target: t,
       weight: Math.abs(Money.toNumber(measured)),

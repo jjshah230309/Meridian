@@ -74,8 +74,8 @@ const ALIASES = {
 };
 
 /** Match one record type's fields against a header list, without deciding anything. */
-function matchHeaders(recordType, headers, repo = null) {
-  const m = meta.getMeta(recordType, repo);
+function matchHeaders(recordType, headers, repo = null, prefetched = null) {
+  const m = prefetched || meta.getMeta(recordType, repo);
   const fields = (m?.fields || []).filter((f) => !f.readOnly);
   const mapping = {};
   const unmatched = [];
@@ -126,7 +126,7 @@ export function guessRecordType(headers, hintName = '', { repo = null, permit = 
     .map((t) => {
       const info = meta.getMeta(t, repo);
       if (!info || !info.fields?.length) return null;
-      const { fields, mapping } = matchHeaders(t, headers, repo);
+      const { fields, mapping } = matchHeaders(t, headers, repo, info);
       const matched = Object.keys(mapping).length;
       if (!matched) return null;
       // Recall -- how much of *this sheet* the type explains -- carries the
@@ -162,19 +162,36 @@ const TRUEISH = new Set(['1', 'true', 'yes', 'y', 't', 'on', 'active']);
 const FALSEISH = new Set(['0', 'false', 'no', 'n', 'f', 'off', 'inactive', '']);
 
 /**
- * A `refFrom` field (e.g. txn.entity_id, driven by txn.entity_type) has no
- * column of its own to map -- `entity_type` is derived at creation time, not
- * something a spreadsheet supplies, exactly as createTxn itself fills it in
- * from the transaction type rather than from input. An invoice is always
- * about a customer, a vendor bill always about a vendor, so the importer
- * assumes the same default createTxn would.
+ * What type of record a `refFrom` reference points to, for one row.
+ *
+ * Two different things share this mechanism. A transaction's entity_id
+ * (driven by entity_type) has no column of its own to map -- entity_type is
+ * derived at creation time, not something a spreadsheet supplies, exactly as
+ * createTxn itself fills it in from the transaction type rather than from
+ * input. An invoice is always about a customer, a vendor bill always about a
+ * vendor, so the importer assumes the same default createTxn would.
+ *
+ * A contact's company_id (driven by company_type) is different: company_type
+ * varies per row and IS a column the sheet can supply, mapped like any other
+ * field. That value has to be read straight out of this row -- there is no
+ * document-type default to fall back on, because "contact" is not even a
+ * transaction type.
  */
-function defaultRefFromType(m) {
+function refTypeFor(field, m, row, map) {
+  const header = Object.keys(map).find((h) => map[h] === field.refFrom);
+  if (header && row[header] !== undefined && row[header] !== '') {
+    const discriminator = (m?.fields || []).find((f) => f.name === field.refFrom);
+    const raw = String(row[header]).trim();
+    if (discriminator?.options?.length) {
+      return discriminator.options.find((o) => norm(o) === norm(raw)) || null;
+    }
+    return raw || null;
+  }
   return (m?.txnType && TXN_TYPES[m.txnType]?.entity) || null;
 }
 
 /** Turn one CSV string into the value the column actually wants. */
-function coerce(field, raw, repo, m = null) {
+function coerce(field, raw, repo, m = null, row = null, map = null) {
   const v = typeof raw === 'string' ? raw.trim() : raw;
   if (v === '' || v === null || v === undefined) return { ok: true, value: null };
 
@@ -184,14 +201,18 @@ function coerce(field, raw, repo, m = null) {
     // path scales into minor units itself -- returning minor units here scaled
     // everything a second time, so a 49.99 price imported as 4,999.00.
     case 'money': {
-      const n = Money.parse(v);
-      if (!Number.isFinite(n)) return { ok: false, message: `"${v}" is not an amount` };
-      return { ok: true, value: Money.toNumber(n) };
+      // Money.parse/Qty.parse are deliberately forgiving for real callers
+      // (a coerced default of 0 is fine once a value is already known-valid)
+      // and so collapse anything unparseable to 0 rather than NaN -- which
+      // means `Number.isFinite(n)` below can never actually be false. Without
+      // this digit check, an imported cell like "N/A" or "TBD" silently
+      // became a real, committed amount of zero instead of a caught error.
+      if (!/\d/.test(v)) return { ok: false, message: `"${v}" is not an amount` };
+      return { ok: true, value: Money.toNumber(Money.parse(v)) };
     }
     case 'qty': {
-      const n = Qty.parse(v);
-      if (!Number.isFinite(n)) return { ok: false, message: `"${v}" is not a quantity` };
-      return { ok: true, value: Qty.toNumber(n) };
+      if (!/\d/.test(v)) return { ok: false, message: `"${v}" is not a quantity` };
+      return { ok: true, value: Qty.toNumber(Qty.parse(v)) };
     }
     case 'number': case 'percent': {
       const n = Number(String(v).replace(/[,%\s]/g, ''));
@@ -216,7 +237,7 @@ function coerce(field, raw, repo, m = null) {
       return { ok: true, value: hit };
     }
     case 'reference': {
-      const refType = field.ref || (field.refFrom ? defaultRefFromType(m) : null);
+      const refType = field.ref || (field.refFrom ? refTypeFor(field, m, row, map) : null);
       const resolved = resolveRef(repo, refType, v);
       if (!resolved) {
         return refType
@@ -354,7 +375,7 @@ export function validateImport(repo, { record_type, text, parsed: given = null, 
       const field = fields[fieldName];
       if (!field) { errors.push({ line: row.__line, field: fieldName, message: `"${fieldName}" is not a field on ${m.label}` }); rowFailed = true; continue; }
       if (field.readOnly) continue;
-      const res = coerce(field, raw, repo, m);
+      const res = coerce(field, raw, repo, m, row, map);
       if (!res.ok) { errors.push({ line: row.__line, field: fieldName, column: header, value: raw, message: res.message }); rowFailed = true; continue; }
       if ((field.type === 'date' || field.type === 'datetime') && isAmbiguousSlashDate(raw)) ambiguousDates++;
       if (res.value !== null) values[fieldName] = res.value;

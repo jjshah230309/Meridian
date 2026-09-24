@@ -8,6 +8,7 @@ import { provisionTenant } from '../src/modules/setup.mjs';
 import * as entities from '../src/modules/entities.mjs';
 import * as rbac from '../src/core/rbac.mjs';
 import * as platform from '../src/modules/platform.mjs';
+import * as records from '../src/modules/records.mjs';
 import { freshTenant } from './helpers.mjs';
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
@@ -41,6 +42,26 @@ test('one tenant cannot read or write another tenant\'s records', () => {
   assert.equal(A.update('customer', betaCustomer.id, { name: 'Hijacked' }), 0);
   assert.equal(B.get('customer', betaCustomer.id).name, 'Beta Customer');
   assert.equal(A.remove('customer', betaCustomer.id), 0);
+});
+
+test('the bulk-lookup helpers stay inside the tenant boundary too', () => {
+  // resolveRecords/resolveTaxRates are unreferenced today (an N+1 fix nobody
+  // has wired in yet), but their SQL was missing the tenant_id predicate
+  // every other lookup here has -- a landmine for whoever reaches for them
+  // first, since the surrounding table names alone would already make db.mjs
+  // refuse to run them at all.
+  const { db, A, B } = twoTenants();
+  const alphaCustomer = transaction(db, () => entities.createCustomer(A, { name: 'Alpha Customer' }));
+  const betaCustomer = transaction(db, () => entities.createCustomer(B, { name: 'Beta Customer' }));
+  transaction(db, () => A.exec("INSERT INTO tax_code (tenant_id, code, name, rate, country, active) VALUES (:t,'STD','Standard',20,'US',1)"));
+  transaction(db, () => B.exec("INSERT INTO tax_code (tenant_id, code, name, rate, country, active) VALUES (:t,'STD','Beta rate',99,'US',1)"));
+
+  const found = records.resolveRecords(A, 'customer', [alphaCustomer.id, betaCustomer.id]);
+  assert.equal(found.size, 1, 'must not resolve the other tenant\'s id');
+  assert.equal(found.get(alphaCustomer.id).name, 'Alpha Customer');
+
+  const rates = records.resolveTaxRates(A, ['STD']);
+  assert.equal(rates.get('STD').rate, 20, 'must read this tenant\'s own rate for a shared code, not the other tenant\'s');
 });
 
 test('search results never cross the tenant boundary', () => {
@@ -148,6 +169,56 @@ test('subsidiary restriction scopes assigned rows but keeps shared ones', () => 
   assert.equal(rbac.canSeeRow(access, 'txn', { subsidiary_id: 'S1' }), true);
   assert.equal(rbac.canSeeRow(access, 'txn', { subsidiary_id: 'S2' }), false);
   assert.equal(rbac.canSeeRow(access, 'txn', { subsidiary_id: null }), true, 'shared rows stay visible');
+});
+
+// time_entry/time_off carry no owner_id/assigned_to/created_by column, only
+// employee_id -- canSeeRow used to only ever look at those three columns, so
+// its own-only check always fell through to "visible" for these two tables
+// no matter whose record it was, even though the list view's SQL filter
+// correctly scoped to the caller's own employee_id. A row that the SQL
+// filter would exclude must also fail the single-row check, and vice versa.
+test('own-only restriction agrees between the SQL filter and the single-row check for employee-owned tables', () => {
+  const access = {
+    isOwner: false, user: { id: 'U1', employee_id: 'E1' }, permissions: { time_entry: 4, time_off: 4 },
+    restrictions: { owner: { allowed: null, ownOnly: true } },
+  };
+  for (const table of ['time_entry', 'time_off']) {
+    const filter = rbac.rowFilter(access, table, { alias: 't' });
+    assert.match(filter.sql, /t\.employee_id = \?/, `${table} filters by employee_id`);
+    assert.deepEqual(filter.params, ['E1']);
+    assert.equal(rbac.canSeeRow(access, table, { employee_id: 'E1' }), true, `${table}: own record stays visible`);
+    assert.equal(rbac.canSeeRow(access, table, { employee_id: 'E2' }), false, `${table}: someone else's record must be denied`);
+  }
+
+  // No linked employee record at all: nothing is "mine", so the filter must
+  // exclude everything rather than silently allowing the whole table through.
+  const unlinked = { isOwner: false, user: { id: 'U2' }, permissions: { time_entry: 4 }, restrictions: { owner: { allowed: null, ownOnly: true } } };
+  assert.match(rbac.rowFilter(unlinked, 'time_entry').sql, /0=1/);
+  assert.equal(rbac.canSeeRow(unlinked, 'time_entry', { employee_id: 'E1' }), false);
+});
+
+// The dimension-restriction allowlist inside rowFilter used to be a hand
+// maintained list of ~12 tables; `project` carries subsidiary_id and
+// department_id but was never added to it, so a subsidiary restriction
+// silently produced no SQL predicate for it while canSeeRow (which reads
+// columns off the row directly, not a list) correctly enforced the same
+// restriction on a single fetch. Passing `db` makes rowFilter ask the real
+// schema instead.
+test('dimension restrictions apply to any table that actually has the column, not just a hand-maintained list', () => {
+  const f = freshTenant();
+  const access = {
+    isOwner: false, user: { id: 'U1' }, permissions: { project: 4 },
+    restrictions: { subsidiary: { allowed: new Set(['S1']), ownOnly: false } },
+  };
+  const withoutDb = rbac.rowFilter(access, 'project', { alias: 'r' });
+  assert.equal(withoutDb.sql, '', 'without a schema handle, project was never in the fallback allowlist either');
+
+  const withDb = rbac.rowFilter(access, 'project', { alias: 'r', db: f.db });
+  assert.match(withDb.sql, /r\.subsidiary_id IN \(\?\)/, 'with the real schema, the restriction is enforced');
+  assert.deepEqual(withDb.params, ['S1']);
+
+  assert.equal(rbac.canSeeRow(access, 'project', { subsidiary_id: 'S1' }), true);
+  assert.equal(rbac.canSeeRow(access, 'project', { subsidiary_id: 'S2' }), false, 'canSeeRow already enforced this; the SQL filter must match it');
 });
 
 // A column whose name is in JSON_COLUMNS is decoded as JSON in EVERY table,

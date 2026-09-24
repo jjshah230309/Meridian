@@ -20,8 +20,11 @@ import * as customRecords from './customrecords.mjs';
 
 // Coercion lives with the metadata that describes it; re-exported here
 // because the API and the importer have always reached for it through this
-// module.
-export { coerce } from './meta.mjs';
+// module. `export { coerce } from './meta.mjs'` alone does NOT bind a local
+// `coerce` -- it only forwards the name to whoever imports it from here --
+// so genericCreate/genericUpdate's own calls below need the import too.
+import { coerce } from './meta.mjs';
+export { coerce };
 
 /** Module-specific create/update handlers; anything absent uses the generic path. */
 export const HANDLERS = {
@@ -146,14 +149,14 @@ export function blockersFor(repo, type, id) {
 export function resolveRecords(repo, table, ids) {
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   if (!uniqueIds.length) return new Map();
-  const rows = repo.query(`SELECT * FROM ${table} WHERE id IN (${uniqueIds.map(() => '?').join(',')})`, uniqueIds);
+  const rows = repo.query(`SELECT * FROM ${table} WHERE tenant_id = :t AND id IN (${uniqueIds.map(() => '?').join(',')})`, uniqueIds);
   return new Map(rows.map(r => [r.id, r]));
 }
 
 export function resolveTaxRates(repo, codes) {
   const uniqueCodes = [...new Set(codes.filter(Boolean))];
   if (!uniqueCodes.length) return new Map();
-  const rows = repo.query(`SELECT code, rate FROM tax_code WHERE code IN (${uniqueCodes.map(() => '?').join(',')})`, uniqueCodes);
+  const rows = repo.query(`SELECT code, rate FROM tax_code WHERE tenant_id = :t AND code IN (${uniqueCodes.map(() => '?').join(',')})`, uniqueCodes);
   return new Map(rows.map(r => [r.code, r]));
 }
 
@@ -204,7 +207,7 @@ export function genericUpdate(repo, type, id, body) {
     const v = coerce(f, body[f.name]);
     if (v !== undefined) values[f.name] = v;
   }
-  if (body.custom !== undefined) values.custom = platform.validateCustom(repo, type, { ...(before.custom || {}), ...body.custom });
+  if (body.custom !== undefined) values.custom = { ...(before.custom || {}), ...platform.validateCustom(repo, type, body.custom, { partial: true }) };
   if (m.fields.some((f) => f.name === 'updated_at')) values.updated_at = nowIso();
   repo.update(m.table, id, values);
   const after = repo.get(m.table, id);

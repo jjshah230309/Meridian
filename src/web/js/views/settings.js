@@ -50,6 +50,8 @@ const choices = (options, current, onPick) => h('div.choice-row',
  * the whole job of this control is to show you the three that are not.
  */
 const PALETTE_CHIPS = {
+  obsidian: ['#0D0E1A', '#6366F1', '#F8F9FC'],
+  carbon: ['#0F1115', '#2C5CE0', '#F5F6F8'],
   ink: ['#17140F', '#9C620E', '#F7F4EF'],
   graphite: ['#1C1B19', '#156F4A', '#F6F5F2'],
   slate: ['#16202B', '#0E6F72', '#F3F5F7'],
@@ -63,7 +65,8 @@ const palettePicker = (current, onPick) => h('div.swatch-row',
     onclick: () => onPick(pal.id),
   },
     h('div.swatch-chips',
-      ...(PALETTE_CHIPS[pal.id] || []).map((c, i) => h('i', { class: i === 2 ? 'wide' : '', style: { background: c } }))),
+      ...(PALETTE_CHIPS[pal.id] || []).map((c, i) => h('i', { class: i === 2 ? 'wide' : '', style: { background: c } })),
+      h('div.icon-chip.on-dark', { style: { color: PALETTE_CHIPS[pal.id]?.[1] } }, icon('sparkles', { size: 12 }))),
     h('div.swatch-body',
       h('div.swatch-name', pal.name, pal.id === current && icon('check', { size: 13 })),
       h('div.swatch-note', pal.note)))));
@@ -143,7 +146,7 @@ const SECTION_RENDERERS = {
         window.__meridianGo('/settings/appearance');
       }), { stacked: true }),
     setting('Typeface',
-      'All four ship inside the application, so they work with no network. Each brings its own type scale, because the same pixel size reads differently in different families.',
+      'All but Styrene & Tiempos and SF Pro ship inside the application, so they work with no network; those two name a font this computer may or may not already have, and fall back cleanly if not. Each brings its own type scale, because the same pixel size reads differently in different families.',
       typefacePicker(store.state.typeface, (value) => {
         store.setTypeface(value);
         window.__meridianGo('/settings/appearance');

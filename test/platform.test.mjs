@@ -50,6 +50,16 @@ test('the expression language evaluates arithmetic, comparison and functions', (
   assert.equal(evalSafe('a.b.c', { a: null }), null, 'missing paths are null, not an error');
 });
 
+test('FV and PV do not divide by zero at a 0% rate', () => {
+  // (Math.pow(1+r, n) - 1) / r is 0/0 at r === 0 -- an interest-free
+  // instalment plan, say -- and PMT already guarded that case; FV and PV did
+  // not, and silently returned NaN into whatever posted the schedule.
+  assert.equal(evalSafe('FV(0, 12, -100)'), -1200);
+  assert.equal(evalSafe('PV(0, 12, -100)'), -1200);
+  assert.equal(evalSafe('FV(0, 12, -100, 500)'), -700);
+  assert.ok(Number.isFinite(evalSafe('FV(0.06, 12, -100)')), 'a real rate must still work');
+});
+
 test('the expression sandbox refuses prototype access and unknown functions', () => {
   assert.throws(() => compile('x.__proto__')({ x: {} }), ExprError);
   assert.throws(() => compile('constructor')({}), ExprError);
@@ -138,6 +148,27 @@ test('custom fields validate their values and compute formulas', () => {
   const customer = f.tx(() => entities.createCustomer(f.repo, { name: 'Acme', custom: { tier: 'Gold' } }));
   const decorated = platform.decorateCustom(f.repo, 'customer', f.repo.get('customer', customer.id));
   assert.equal(decorated.custom.greeting, 'Hello Acme');
+});
+
+test('a money custom field on a customer is stored scaled, and a later patch does not blank the rest', () => {
+  // createCustomer/updateCustomer wrote `custom` straight from the caller,
+  // skipping platform.validateCustom entirely -- unlike every other write
+  // path (records.mjs's genericCreate/genericUpdate, customrecords.mjs).
+  // A money/qty field went in unscaled, and an update replaced the whole
+  // blob instead of merging onto it.
+  const f = freshTenant();
+  f.tx(() => {
+    platform.createCustomField(f.repo, { record_type: 'customer', name: 'bonus', label: 'Signing bonus', type: 'money' });
+    platform.createCustomField(f.repo, { record_type: 'customer', name: 'tier', label: 'Tier', type: 'text' });
+  });
+  const customer = f.tx(() => entities.createCustomer(f.repo, {
+    name: 'Acme', custom: { bonus: 250, tier: 'gold' },
+  }));
+  assert.equal(f.repo.get('customer', customer.id).custom.bonus, 25000, 'a money field is stored in minor units, like every other money field');
+
+  const updated = f.tx(() => entities.updateCustomer(f.repo, customer.id, { custom: { tier: 'platinum' } }));
+  assert.equal(updated.custom.tier, 'platinum');
+  assert.equal(updated.custom.bonus, 25000, 'a patch naming one custom field must not blank the others');
 });
 
 test('a custom field cannot shadow a standard field or be renamed', () => {
@@ -359,4 +390,18 @@ test('every writable field on customer and vendor really saves', async () => {
       assert.deepEqual(after[name], want, `${type}.${name} did not save`);
     }
   }
+});
+
+test('"is any of" on a money field compares dollars, like eq and between do', () => {
+  // eq and between both coerce the filter value (major units -> the stored
+  // minor-unit integer) before binding it; the "in" branch skipped that step
+  // and bound the raw major-unit value, so it could never match.
+  const f = freshTenant();
+  f.tx(() => entities.createCustomer(f.repo, { name: 'Acme Co', credit_limit: 5000, subsidiary_id: f.subsidiaryId }));
+
+  const eq = platform.runSearch(f.repo, 'customer', { filters: [{ field: 'credit_limit', op: 'eq', value: 5000 }] });
+  assert.equal(eq.total, 1);
+
+  const isAnyOf = platform.runSearch(f.repo, 'customer', { filters: [{ field: 'credit_limit', op: 'in', value: [5000] }] });
+  assert.equal(isAnyOf.total, 1, '"is any of" must match the same row eq does');
 });

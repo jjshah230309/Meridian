@@ -335,9 +335,9 @@ async function agingReport(endpoint, title, entityType, { go }) {
       h('div.card-body', { style: { borderBottom: '1px solid var(--border)' } },
         stackedBar(segs), legend(segs),
         h('div.row', { style: { marginTop: '10px', gap: '24px' } },
-          h('div', h('div.muted', { style: { fontSize: '11px' } }, 'TOTAL OUTSTANDING'), h('div', { style: { fontSize: '17px', fontWeight: 650 } }, fmt.money(r.total))),
-          h('div', h('div.muted', { style: { fontSize: '11px' } }, 'OVERDUE'), h('div', { style: { fontSize: '17px', fontWeight: 650 }, class: r.overdue_pct > 25 ? 'num-neg' : '' }, `${fmt.money(r.overdue_total)} (${fmt.pct(r.overdue_pct)})`)),
-          h('div', h('div.muted', { style: { fontSize: '11px' } }, 'DOCUMENTS'), h('div', { style: { fontSize: '17px', fontWeight: 650 } }, String(r.document_count))))),
+          h('div', h('div.muted', { style: { fontSize: '11px' } }, 'TOTAL OUTSTANDING'), h('div', { style: { fontSize: '17px', fontWeight: 600 } }, fmt.money(r.total))),
+          h('div', h('div.muted', { style: { fontSize: '11px' } }, 'OVERDUE'), h('div', { style: { fontSize: '17px', fontWeight: 600 }, class: r.overdue_pct > 25 ? 'num-neg' : '' }, `${fmt.money(r.overdue_total)} (${fmt.pct(r.overdue_pct)})`)),
+          h('div', h('div.muted', { style: { fontSize: '11px' } }, 'DOCUMENTS'), h('div', { style: { fontSize: '17px', fontWeight: 600 } }, String(r.document_count))))),
       h('div.grid-wrap', h('table.grid',
         h('thead', h('tr', h('th', fmt.titleCase(entityType)), ...r.bucket_labels.map((l) => h('th.num', l)), h('th.num', 'Total'))),
         h('tbody', ...r.entities.flatMap((e) => [

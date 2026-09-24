@@ -85,12 +85,23 @@ export function deleteCustomField(repo, id) {
   return true;
 }
 
-/** Validate and coerce a record's custom values against its field definitions. */
-export function validateCustom(repo, recordType, values = {}) {
+/**
+ * Validate and coerce a record's custom values against its field definitions.
+ *
+ * `partial` changes what an absent field means. By default this validates a
+ * complete set -- a field missing from `values` is cleared to null, which is
+ * right when `values` is the record's whole custom blob. A caller merging a
+ * patch onto an existing, already-coerced blob wants the opposite: skip any
+ * field the patch does not mention, so the untouched ones can be merged back
+ * in unchanged rather than round-tripped through coercion a second time --
+ * scaling a money field's minor-unit value up by 100x again, for instance.
+ */
+export function validateCustom(repo, recordType, values = {}, { partial = false } = {}) {
   const defs = listCustomFields(repo, recordType);
   const out = {}; const errors = {};
   for (const d of defs) {
     if (d.type === 'formula') continue;                 // computed on read
+    if (partial && !(d.name in (values || {}))) continue;
     let v = values[d.name];
     if (v === undefined) v = null;
     if (d.required && (v === null || v === '')) { errors[`custom.${d.name}`] = `${d.label} is required`; continue; }
@@ -215,7 +226,11 @@ export function runSearch(repo, recordType, definition = {}, { access = null, li
     if (op.multi) {
       const vals = Array.isArray(f.value) ? f.value : String(f.value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
       if (!vals.length) { where.push('0=1'); continue; }
-      where.push(`${col} IN (${vals.map(() => '?').join(',')})`); params.push(...vals); continue;
+      // Same coercion as eq/between, or "is any of" on a money or quantity
+      // field compares the major-unit value the caller typed against the
+      // minor-unit integer that is actually stored, and never matches.
+      const coerced = vals.map((v) => coerce(f, v));
+      where.push(`${col} IN (${coerced.map(() => '?').join(',')})`); params.push(...coerced); continue;
     }
     if (op.pair) {
       const [a, b] = Array.isArray(f.value) ? f.value : String(f.value ?? '').split(',');
@@ -235,7 +250,7 @@ export function runSearch(repo, recordType, definition = {}, { access = null, li
   }
 
   // Row-level security, applied here rather than trusted to callers.
-  const rf = rowFilter(access, meta.table, { alias: 'r' });
+  const rf = rowFilter(access, meta.table, { alias: 'r', db: repo.db });
 
   // Sorting is validated the same way as columns.
   let orderSql = meta.defaultSort ? `r.${meta.defaultSort}` : 'r.id DESC';

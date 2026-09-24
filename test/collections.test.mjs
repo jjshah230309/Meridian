@@ -387,6 +387,31 @@ test('a letter to a sterling customer is written in sterling', () => {
   assert.equal(w.rows[0].overdue, Money.parse(2500));
 });
 
+test('over_limit compares the credit limit in the same currency as the balance it is judged against', () => {
+  // `total` on the worklist is already converted to the reporting currency;
+  // credit_limit is stored in the customer's own currency. Comparing them
+  // directly either wrongly flags a customer who is well within a foreign
+  // credit limit, or misses one who has genuinely gone over it.
+  const f = freshTenant();
+  f.tx(() => f.repo.exec(
+    `INSERT INTO exchange_rate (tenant_id, from_currency, to_currency, rate_date, rate) VALUES (:t,?,?,?,?)`,
+    ['GBP', 'USD', '2026-01-01', 1.25]));
+  const customer = f.tx(() => entities.createCustomer(f.repo, {
+    name: 'Brit Ltd', subsidiary_id: f.subsidiaryId, currency: 'GBP', credit_limit: 2200,
+  }));
+  f.tx(() => txnMod.createTxn(f.repo, 'INVOICE', {
+    entity_id: customer.id, subsidiary_id: f.subsidiaryId, currency: 'GBP',
+    txn_date: addDays(NOW, -60), due_date: addDays(NOW, -45),
+    lines: [{ account_id: acct(f, '4020').id, quantity: 1, unit_price: 2000 }],
+  }));
+
+  // £2,000 owed against a £2,200 limit: genuinely under, in the customer's
+  // own currency. In the reporting currency that is $2,500 against a raw
+  // 2200 -- which reads as over the limit unless 2200 is converted too.
+  const w = collections.worklist(f.repo, { as_of: NOW });
+  assert.equal(w.rows[0].over_limit, false, '£2,000 against a £2,200 limit is under, not over');
+});
+
 test('a letter lists what it is chasing, and the items add up to the figure in it', () => {
   const f = freshTenant();
   const { customer } = lateInvoice(f, { name: 'Mixed Ltd', daysLate: 45, amount: 5000 });

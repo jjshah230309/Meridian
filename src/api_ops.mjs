@@ -9,7 +9,7 @@
 // same shape: check the permission, do the work in the module, return JSON.
 import * as rbac from './core/rbac.mjs';
 import { badRequest, rowList } from './core/http.mjs';
-import { today, addDays } from './core/util.mjs';
+import { today, addDays, Qty } from './core/util.mjs';
 import * as assets from './modules/assets.mjs';
 import * as schedules from './modules/schedules.mjs';
 import * as recurring from './modules/recurring.mjs';
@@ -73,7 +73,10 @@ export function registerOpsRoutes(r, P) {
     rbac.require$(ctx.access, 'fixed_asset', LEVEL.EDIT);
     const body = ctx.body || {};
     if (body.dry_run) return assets.runDepreciation(ctx.repo, { through: body.through || today(), dry_run: true });
-    return ctx.tx(() => assets.runDepreciation(ctx.repo, { through: body.through || today() }));
+    // Not wrapped in ctx.tx(): runDepreciation commits each subsidiary/date
+    // group in its own transaction, on purpose, so one group failing cannot
+    // roll back groups this same run already posted.
+    return assets.runDepreciation(ctx.repo, { through: body.through || today() });
   });
 
   // ---------------------------------------- revenue recognition & amortisation
@@ -146,8 +149,12 @@ export function registerOpsRoutes(r, P) {
     rbac.require$(ctx.access, 'recurring_journal', LEVEL.EDIT);
     const body = ctx.body || {};
     const opts = { through: body.through || today(), id: body.id || null };
-    if (body.dry_run) return recurring.generate(ctx.repo, { ...opts, dry_run: true });
-    return ctx.tx(() => recurring.generate(ctx.repo, opts));
+    // Not wrapped in ctx.tx(): generate() posts several templates in one
+    // call and commits each one in its own transaction, on purpose, so one
+    // bad template cannot roll back postings this run already made for a
+    // different one. Wrapping the whole call here would merge those into
+    // one outer transaction and undo that isolation.
+    return recurring.generate(ctx.repo, { ...opts, dry_run: !!body.dry_run });
   });
 
   // ------------------------------------------ foreign currency revaluation
@@ -599,7 +606,10 @@ export function registerOpsRoutes(r, P) {
     const body = ctx.body || {};
     const opts = { through: body.through || today(), id: body.id || null, txn_date: body.txn_date || null };
     if (body.dry_run) return subs.runBilling(ctx.repo, { ...opts, dry_run: true });
-    return ctx.tx(() => subs.runBilling(ctx.repo, opts));
+    // Not wrapped in ctx.tx(): runBilling commits each subscription's
+    // invoice in its own transaction, on purpose, so one subscription
+    // failing cannot roll back invoices this same run already billed.
+    return subs.runBilling(ctx.repo, opts);
   });
 
   // ---- intercompany
@@ -791,7 +801,10 @@ export function registerOpsRoutes(r, P) {
     const body = ctx.body || {};
     const opts = { book_id: ctx.params.id, through: body.through || today() };
     if (body.dry_run) return books.runBookDepreciation(ctx.repo, { ...opts, dry_run: true });
-    return ctx.tx(() => books.runBookDepreciation(ctx.repo, opts));
+    // Not wrapped in ctx.tx(): runBookDepreciation commits each asset's
+    // adjustment in its own transaction, on purpose, so one asset failing
+    // cannot roll back adjustments this same run already posted.
+    return books.runBookDepreciation(ctx.repo, opts);
   });
 
   // ======================================================== budgeting
@@ -939,7 +952,7 @@ export function registerOpsRoutes(r, P) {
   });
   r.get(`${P}/items/:id/explode`, async (ctx) => {
     rbac.require$(ctx.access, 'bom', LEVEL.VIEW);
-    return { components: mfg.explode(ctx.repo, ctx.params.id, int(ctx.query.quantity, 1) * 1_000_000) };
+    return { components: mfg.explode(ctx.repo, ctx.params.id, Qty.parse(ctx.query.quantity ?? 1)) };
   });
   r.get(`${P}/items/:id/cost-rollup`, async (ctx) => {
     rbac.require$(ctx.access, 'bom', LEVEL.VIEW);
@@ -1041,7 +1054,10 @@ export function registerOpsRoutes(r, P) {
   r.post(`${P}/waves/:id/ship`, async (ctx) => {
     rbac.require$(ctx.access, 'pick_wave', LEVEL.EDIT);
     rbac.require$(ctx.access, 'fulfillment', LEVEL.CREATE);
-    return ctx.tx(() => wh.shipWave(ctx.repo, ctx.params.id, ctx.body || {}));
+    // Not wrapped in ctx.tx(): shipWave commits each order's fulfilment in
+    // its own transaction, on purpose, so one order failing cannot roll back
+    // fulfilments this same call already completed for another.
+    return wh.shipWave(ctx.repo, ctx.params.id, ctx.body || {});
   });
 
   // ======================================================== planning
@@ -1071,7 +1087,10 @@ export function registerOpsRoutes(r, P) {
   });
   r.post(`${P}/planning/suggestions/action`, async (ctx) => {
     rbac.require$(ctx.access, 'purchase_order', LEVEL.CREATE);
-    return ctx.tx(() => planning.actionSuggestions(ctx.repo, ctx.body?.ids || [], ctx.body || {}));
+    // Not wrapped in ctx.tx(): actionSuggestions commits each vendor's
+    // purchase order in its own transaction, on purpose, so one vendor
+    // failing cannot roll back orders this same call already raised.
+    return planning.actionSuggestions(ctx.repo, ctx.body?.ids || [], ctx.body || {});
   });
   r.post(`${P}/planning/suggestions/dismiss`, async (ctx) => {
     rbac.require$(ctx.access, 'demand_plan', LEVEL.EDIT);

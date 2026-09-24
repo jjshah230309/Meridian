@@ -179,6 +179,51 @@ test('a held schedule waits for somebody to say the work is done', () => {
   assert.equal(gl.integrityCheck(f.repo).ok, true);
 });
 
+test('two schedules booked at different fx rates each post at their own rate, not the first one in the group', () => {
+  // runRecognition groups slices due on the same date into one journal entry
+  // regardless of which schedule they came from. It used to post the whole
+  // group at a single fx_rate (whichever schedule sorted first), converting
+  // every line as if it had been booked at that one rate.
+  const f = freshTenant({ currency: 'USD' });
+  f.tx(() => {
+    f.repo.exec(`INSERT OR REPLACE INTO exchange_rate (tenant_id, from_currency, to_currency, rate_date, rate)
+                 VALUES (:t,'EUR','USD',?,?)`, ['2026-01-01', 1.0]);
+    f.repo.exec(`INSERT OR REPLACE INTO exchange_rate (tenant_id, from_currency, to_currency, rate_date, rate)
+                 VALUES (:t,'EUR','USD',?,?)`, ['2026-01-15', 2.0]);
+  });
+  const template = f.tx(() => schedules.createTemplate(f.repo, {
+    name: 'Support plan', kind: 'revenue', method: 'straight_monthly', term_months: 1, start_rule: 'transaction_date',
+  }));
+  const customer = f.tx(() => entities.createCustomer(f.repo, { name: 'Europa GmbH', currency: 'EUR', subsidiary_id: f.subsidiaryId }));
+  const item = f.tx(() => inventory.createItem(f.repo, {
+    sku: 'SUP', name: 'Support plan', type: 'service', base_price: 100,
+    income_account_id: acct(f, '4020'), revenue_template_id: template.id,
+  }));
+  // Invoice A books at rate 1.00 (100 EUR = $100); invoice B two weeks later
+  // books at rate 2.00 (100 EUR = $200) -- same schedule, different rate.
+  f.tx(() => txnMod.createTxn(f.repo, 'INVOICE', {
+    entity_id: customer.id, subsidiary_id: f.subsidiaryId, txn_date: '2026-01-01', currency: 'EUR',
+    lines: [{ item_id: item.id, quantity: 1, unit_price: 100 }],
+  }));
+  f.tx(() => txnMod.createTxn(f.repo, 'INVOICE', {
+    entity_id: customer.id, subsidiary_id: f.subsidiaryId, txn_date: '2026-01-15', currency: 'EUR',
+    lines: [{ item_id: item.id, quantity: 1, unit_price: 100 }],
+  }));
+  // Both invoices deferred correctly at their own rate when booked -- $100 +
+  // $200 -- which the grouped release below must also honour.
+  assert.equal(balance(f, '2300'), Money.parse(-300), 'both invoices must have deferred at their own rate when booked');
+
+  // Each schedule's own slicing lands on a different date; force them due on
+  // the same date so runRecognition groups them into one journal entry.
+  f.tx(() => f.repo.exec("UPDATE schedule_line SET plan_date = '2026-01-31' WHERE tenant_id = :t AND status = 'planned'"));
+
+  const run = f.tx(() => schedules.runRecognition(f.repo, { kind: 'revenue', through: '2026-01-31' }));
+  assert.equal(run.posted, 1, 'both schedules must land in one journal entry');
+  assert.equal(-balance(f, '4020'), Money.parse(300), '$100 + $200 recognised, not $100 + $100');
+  assert.equal(balance(f, '2300'), 0, 'both schedules release in full, in one month, so nothing stays deferred');
+  assert.equal(gl.integrityCheck(f.repo).ok, true);
+});
+
 test('the waterfall reports base currency and reconciles to the deferred balance', () => {
   const f = freshTenant();
   supportSale(f);

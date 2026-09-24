@@ -497,7 +497,7 @@ function bulkImportCard(go, types, typeOptions) {
 
     const typeSel = h('select', { style: { width: '220px' }, disabled: item.unreadable }, ...typeOptions(item.recordType));
     typeSel.addEventListener('change', () => {
-      item.recordType = typeSel.value; item.mapping = null; item.report = null; item.status = item.recordType ? 'pending' : 'pending';
+      item.recordType = typeSel.value; item.mapping = null; item.report = null; item.status = 'pending';
       draw();
     });
 

@@ -5,6 +5,8 @@ SIL Open Font License, Version 1.1.
   Source Sans 3                                 (c) Adobe
   JetBrains Mono                                (c) JetBrains s.r.o.
   Inter                                         (c) The Inter Project Authors
+  Manrope                                       (c) Mikhail Sharanda
+  Fira Code                                     (c) The Fira Code Project Authors
 
 The full licence text is available at https://openfontlicense.org and is
 reproduced in each project's own repository. In summary, the OFL permits the

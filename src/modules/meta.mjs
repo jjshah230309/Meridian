@@ -1725,7 +1725,10 @@ export function getMeta(recordType, repo = null) {
 }
 export const listRecordTypes = (repo = null) => [
   ...Object.keys(RECORDS),
-  ...(repo ? Object.keys(customRecords.describeAll(repo)) : []),
+  // Only the names are wanted here, so list the types directly rather than
+  // through describeAll, which builds every type's full field descriptor
+  // (two more queries each) just to have something to read a key off.
+  ...(repo ? customRecords.listTypes(repo).map((t) => customRecords.qualified(t.name)) : []),
 ];
 export const fieldsOf = (recordType, repo = null) => getMeta(recordType, repo)?.fields || [];
 export const fieldMap = (recordType, repo = null) => Object.fromEntries(fieldsOf(recordType, repo).map((f) => [f.name, f]));

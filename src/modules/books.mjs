@@ -473,7 +473,11 @@ export function runBookDepreciation(repo, { book_id, through = today(), dry_run 
     // A bigger charge in this book is more expense and more accumulated
     // depreciation; a smaller one is the reverse.
     const d = p.difference;
-    const adj = postAdjustment(repo, {
+    // postAdjustment does not manage its own transaction, so each asset's
+    // adjustment is wrapped here -- both so its own several writes are
+    // atomic, and so one asset failing (an inactive account, say) cannot
+    // roll back adjustments this same run already posted for another asset.
+    const adj = repo.tx(() => postAdjustment(repo, {
       book_id: book.id, subsidiary_id: p.subsidiary_id, txn_date: p.depr_date,
       memo: `${p.asset_no} depreciation under ${book.name} — period ${p.period_no}`,
       source_type: 'depreciation', source_id: p.asset_id, source_key: p.source_key,
@@ -481,7 +485,7 @@ export function runBookDepreciation(repo, { book_id, through = today(), dry_run 
         { account_id: p.expense_account_id, base_debit: d > 0 ? d : 0, base_credit: d < 0 ? -d : 0, memo: 'Difference in charge' },
         { account_id: p.accum_account_id, base_debit: d < 0 ? -d : 0, base_credit: d > 0 ? d : 0, memo: 'Difference in accumulated depreciation' },
       ],
-    });
+    }));
     made.push({ ...p, entry_no: adj.entry_no, adjustment_id: adj.id });
   }
 

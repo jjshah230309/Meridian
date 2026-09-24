@@ -97,3 +97,32 @@ test('a job with nowhere to draw parts from says so rather than billing thin air
     { line_type: 'part', item_id: item.id, quantity: 1, unit_price: 500 },
   ])), /cannot be issued/);
 });
+
+test('voiding a document reverses both moves when two lines share an item and location', () => {
+  // voidTxn prefetches item_location rows once into a posMap and hands the
+  // same snapshot to every moveStock call for that item/location. moveStock
+  // writes qty_on_hand/total_value as an absolute UPDATE computed from
+  // whatever position it was given, so without the fix, the second call
+  // overwrote the first reversal instead of compounding onto it.
+  const f = freshTenant();
+  const item = f.tx(() => inventory.createItem(f.repo, {
+    sku: 'GEAR', name: 'Gear', type: 'inventory', purchase_price: 10,
+  }));
+  const adj = f.tx(() => txnMod.createTxn(f.repo, 'INVENTORY_ADJUSTMENT', {
+    subsidiary_id: f.subsidiaryId, txn_date: DATE, location_id: f.location.id,
+    lines: [
+      { item_id: item.id, quantity: 10, unit_cost: 4 },
+      { item_id: item.id, quantity: 5, unit_cost: 4 },
+    ],
+  }));
+  assert.equal(inventory.position(f.repo, item.id, f.location.id).qty_on_hand, Qty.parse(15));
+  assert.equal(inventory.position(f.repo, item.id, f.location.id).total_value, Money.parse(60));
+
+  f.tx(() => txnMod.voidTxn(f.repo, adj.id));
+
+  const pos = inventory.position(f.repo, item.id, f.location.id);
+  assert.equal(pos.qty_on_hand, 0, 'both adjustments must be reversed, not just the last one');
+  assert.equal(pos.total_value, 0);
+  assert.equal(tieOut(f, 'Inventory').difference, 0);
+  assert.equal(gl.integrityCheck(f.repo).ok, true);
+});

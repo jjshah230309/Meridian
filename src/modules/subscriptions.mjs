@@ -706,56 +706,73 @@ export function runBilling(repo, { through = today(), id = null, dry_run = false
       continue;
     }
 
-    const invoice = !billable.length ? null : T.createTxn(repo, 'INVOICE', {
-      entity_id: s.customer_id, subsidiary_id: s.subsidiary_id, txn_date: invoiceDate,
-      currency: s.currency, price_level_id: s.price_level_id || undefined,
-      memo: s.name || `Subscription ${s.subscription_no}`,
-      reference: s.po_number || s.subscription_no,
-      lines: billable.map((c) => ({
-        item_id: c.line.item_id,
-        description: periodLabel(c),
-        quantity: Qty.toNumber(c.model === 'recurring' ? c.quantity : c.quantity),
-        // The period's price after proration and discount, expressed as a
-        // unit price so the invoice line multiplies back to the same figure.
-        unit_price: Money.toNumber(unitFor(c)),
-        // What the schedules need in order to earn it over the right months.
-        service_start: c.period_start,
-        service_end: addDays(c.period_end, -1),
-      })),
-    });
-    if (invoice) repo.update('txn', invoice.id, { subscription_id: s.id });
-
-    const now = nowIso();
-    for (const c of charges) {
-      const billingId = repo.insert('subscription_billing', {
-        id: ulid(), subscription_id: s.id, line_id: c.line.id,
-        period_start: c.period_start, period_end: c.period_end,
-        quantity: c.quantity, unit_price: c.unit_price, amount: c.amount,
-        prorated: c.prorated, proration: c.proration,
-        invoice_txn_id: invoice ? invoice.id : null, created_at: now,
+    // Each subscription's invoice, billing records and billed_through
+    // advance are one transaction, so one subscription failing (a closed
+    // period reached mid-run, a credit check, a missing revenue account)
+    // cannot roll back invoices this same run already billed for other,
+    // unrelated subscriptions.
+    repo.tx(() => {
+      const invoice = !billable.length ? null : T.createTxn(repo, 'INVOICE', {
+        entity_id: s.customer_id, subsidiary_id: s.subsidiary_id, txn_date: invoiceDate,
+        currency: s.currency, price_level_id: s.price_level_id || undefined,
+        memo: s.name || `Subscription ${s.subscription_no}`,
+        reference: s.po_number || s.subscription_no,
+        lines: billable.map((c) => {
+          // The period's price after proration and discount, expressed as a
+          // unit price so the invoice line multiplies back to the same
+          // figure -- except proration rarely divides evenly across a whole
+          // number of units, so createTxn's own quantity x rate can land a
+          // cent or more away from the amount actually recorded in
+          // subscription_billing. Where that would happen, bill the exact
+          // amount as a single unit instead: what's invoiced must always
+          // match what was previewed and recorded, not just approximate it.
+          const rate = unitFor(c);
+          const exact = Qty.extend(c.quantity, rate) === c.amount;
+          return {
+            item_id: c.line.item_id,
+            description: periodLabel(c),
+            quantity: exact ? Qty.toNumber(c.quantity) : 1,
+            unit_price: Money.toNumber(exact ? rate : c.amount),
+            // What the schedules need in order to earn it over the right months.
+            service_start: c.period_start,
+            service_end: addDays(c.period_end, -1),
+          };
+        }),
       });
-      for (const usageId of c.usage_ids || []) repo.update('subscription_usage', usageId, { billing_id: billingId });
-    }
+      if (invoice) repo.update('txn', invoice.id, { subscription_id: s.id });
 
-    const nextDate = nextBillDateAfter(s, plan.billed_through);
-    repo.update('subscription', s.id, {
-      billed_through: plan.billed_through,
-      next_bill_date: nextDate,
-      updated_at: now,
-    });
-    // A subscription that has billed to the end of its term either renews or
-    // stops here, rather than quietly carrying on.
-    if (s.end_date && plan.billed_through > s.end_date) closeTerm(repo, s.id);
+      const now = nowIso();
+      for (const c of charges) {
+        const billingId = repo.insert('subscription_billing', {
+          id: ulid(), subscription_id: s.id, line_id: c.line.id,
+          period_start: c.period_start, period_end: c.period_end,
+          quantity: c.quantity, unit_price: c.unit_price, amount: c.amount,
+          prorated: c.prorated, proration: c.proration,
+          invoice_txn_id: invoice ? invoice.id : null, created_at: now,
+        });
+        for (const usageId of c.usage_ids || []) repo.update('subscription_usage', usageId, { billing_id: billingId });
+      }
 
-    invoiced.push({
-      subscription_id: s.id, subscription_no: s.subscription_no,
-      customer_id: s.customer_id, customer_name: repo.get('customer', s.customer_id)?.name || '',
-      invoice_id: invoice ? invoice.id : null,
-      txn_no: invoice ? invoice.txn_no : null,
-      txn_date: invoiceDate,
-      periods: plan.periods.length, lines: billable.length,
-      currency: s.currency, amount: total, billed_through: plan.billed_through,
-      note: invoice ? '' : 'Usage stayed within the included allowance, so there was nothing to invoice.',
+      const nextDate = nextBillDateAfter(s, plan.billed_through);
+      repo.update('subscription', s.id, {
+        billed_through: plan.billed_through,
+        next_bill_date: nextDate,
+        updated_at: now,
+      });
+      // A subscription that has billed to the end of its term either renews or
+      // stops here, rather than quietly carrying on.
+      if (s.end_date && plan.billed_through > s.end_date) closeTerm(repo, s.id);
+
+      invoiced.push({
+        subscription_id: s.id, subscription_no: s.subscription_no,
+        customer_id: s.customer_id, customer_name: repo.get('customer', s.customer_id)?.name || '',
+        invoice_id: invoice ? invoice.id : null,
+        txn_no: invoice ? invoice.txn_no : null,
+        txn_date: invoiceDate,
+        periods: plan.periods.length, lines: billable.length,
+        currency: s.currency, amount: total, billed_through: plan.billed_through,
+        note: invoice ? '' : 'Usage stayed within the included allowance, so there was nothing to invoice.',
+      });
     });
   }
 

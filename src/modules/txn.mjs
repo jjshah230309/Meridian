@@ -823,6 +823,7 @@ export function postTxn(repo, id) {
         const r = inv.moveStock(repo, {
           item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: -l.quantity,
           type: 'shipment', source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
+          item: itemMap.get(l.item_id),
         });
         l._cogs = Math.abs(r.value_delta);
       }
@@ -834,6 +835,7 @@ export function postTxn(repo, id) {
           unit_cost: Money.convert(l.unit_price, t.fx_rate || 1),
           type: 'receipt', source_type: t.type, source_id: id,
           txn_date: t.txn_date, memo: t.txn_no,
+          item: itemMap.get(l.item_id),
         });
         l._value = r.value_delta;
       }
@@ -865,6 +867,7 @@ export function postTxn(repo, id) {
           item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
           unit_cost: l.unit_cost || undefined, type: 'adjustment', source_type: t.type, source_id: id,
           txn_date: t.txn_date, memo: t.memo || t.txn_no,
+          item: itemMap.get(l.item_id),
         });
         l._value = r.value_delta;
       }
@@ -938,12 +941,25 @@ export function voidTxn(repo, id, { reason = '' } = {}) {
         const posMap = new Map(positions.map((p) => [p.item_id + '|' + p.location_id, p]));
 
         for (const m of moves) {
-          inv.moveStock(repo, {
+          const posKey = m.item_id + '|' + m.location_id;
+          const pos = posMap.get(posKey);
+          const result = inv.moveStock(repo, {
             item_id: m.item_id, location_id: m.location_id, qty_delta: -m.qty_delta,
             unit_cost: m.unit_cost, type: 'adjustment', source_type: 'void', source_id: id,
             txn_date: today(), memo: `Void of ${t.txn_no}`,
-            item: itemMap.get(m.item_id), pos: posMap.get(m.item_id + '|' + m.location_id),
+            item: itemMap.get(m.item_id), pos,
           });
+          // moveStock writes qty_on_hand/total_value as an absolute UPDATE
+          // computed from the `pos` it was handed, so a document with two
+          // moves against the same item and location has to see what the
+          // first one just wrote here -- otherwise the shared, pre-fetched
+          // snapshot is stale and the second call overwrites the first
+          // reversal instead of compounding onto it.
+          if (pos && !result.skipped) {
+            pos.qty_on_hand = result.qty_after;
+            pos.total_value = (pos.total_value || 0) + result.value_delta;
+            pos.avg_cost = result.avg_cost;
+          }
         }
       }
     }

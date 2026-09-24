@@ -8,7 +8,7 @@
 // pipeline) are exposed as first-class entity sets -- because the point of
 // connecting a BI tool is to get the figures the business talks about, not
 // to re-implement the ledger in DAX.
-import { Money, Qty, nowIso, today } from '../core/util.mjs';
+import { Money, Qty, MONEY_SCALE, QTY_SCALE, nowIso, today } from '../core/util.mjs';
 import { badRequest, notFound } from '../core/http.mjs';
 import * as meta from './meta.mjs';
 import * as rbac from '../core/rbac.mjs';
@@ -85,22 +85,21 @@ export const ANALYTIC_SETS = {
       AccountNumber: 'a.number', AccountName: 'a.name', AccountType: 'a.type', Subtype: 'a.subtype',
       SubsidiaryName: 's.name', Amount: 'SUM(CASE WHEN a.type = \'INCOME\' THEN b.base_credit - b.base_debit ELSE b.base_debit - b.base_credit END)',
     },
+    // Money and quantity columns are stored as scaled integers; a $filter
+    // literal compared against one of these has to be scaled the same way,
+    // or "Amount gt 500" ends up comparing 500 against a value stored as
+    // 50000.
+    scale: { Amount: MONEY_SCALE },
     rows(repo, { filter, order } = {}) {
       const params = [];
-      let where = `b.tenant_id = :t AND a.type IN ('INCOME','EXPENSE')`;
-      if (filter) {
-        const sql = filterToSql(filter, params);
-        where += ` AND ${sql}`;
-      }
-      let orderBy = `p.start_date, a.number`;
-      if (order) {
-        orderBy = order.split(',').map(p => {
-          const [name, dir] = p.trim().split(/\s+/);
-          const col = this.colMap[name];
-          if (!col) return null;
-          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
-        }).filter(Boolean).join(', ') || orderBy;
-      }
+      const where = `b.tenant_id = :t AND a.type IN ('INCOME','EXPENSE')`;
+      // Amount is an aggregate (SUM), so a filter naming it has to run after
+      // GROUP BY -- in HAVING, not WHERE. The other columns are functionally
+      // determined by the grouping keys (p.id, a.id, s.id), so HAVING can
+      // filter on those too; there is no need to split the predicate.
+      let having = '';
+      if (filter) having = filterToSql(filter, params);
+      const orderBy = resolveOrderBy(order, this.colMap, `p.start_date, a.number`);
       return repo.query(`
         SELECT p.name AS PeriodName, p.start_date AS PeriodStart, p.end_date AS PeriodEnd, p.fiscal_year AS FiscalYear,
                a.number AS AccountNumber, a.name AS AccountName, a.type AS AccountType,
@@ -113,6 +112,7 @@ export const ANALYTIC_SETS = {
         JOIN subsidiary s ON s.tenant_id = b.tenant_id AND s.id = b.subsidiary_id
         WHERE ${where}
         GROUP BY p.id, a.id, s.id
+        ${having ? `HAVING ${having}` : ''}
         ORDER BY ${orderBy}`, params)
         .map((r) => ({ ...r, Amount: Money.toNumber(r.AmountMinor), AmountMinor: undefined }));
     },
@@ -131,22 +131,16 @@ export const ANALYTIC_SETS = {
       AccountType: 'a.type', SubsidiaryName: 's.name',
       Debit: 'SUM(b.base_debit)', Credit: 'SUM(b.base_credit)', Balance: 'SUM(b.base_debit) - SUM(b.base_credit)',
     },
+    scale: { Debit: MONEY_SCALE, Credit: MONEY_SCALE, Balance: MONEY_SCALE },
     rows(repo, { filter, order } = {}) {
       const params = [];
-      let where = `b.tenant_id = :t`;
-      if (filter) {
-        const sql = filterToSql(filter, params);
-        where += ` AND ${sql}`;
-      }
-      let orderBy = `p.start_date, a.number`;
-      if (order) {
-        orderBy = order.split(',').map(p => {
-          const [name, dir] = p.trim().split(/\s+/);
-          const col = this.colMap[name];
-          if (!col) return null;
-          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
-        }).filter(Boolean).join(', ') || orderBy;
-      }
+      const where = `b.tenant_id = :t`;
+      // Debit/Credit/Balance are aggregates, so a filter on them has to be a
+      // HAVING clause, evaluated after GROUP BY -- see the note on
+      // ProfitAndLoss above.
+      let having = '';
+      if (filter) having = filterToSql(filter, params);
+      const orderBy = resolveOrderBy(order, this.colMap, `p.start_date, a.number`);
       return repo.query(`
         SELECT p.name AS PeriodName, p.end_date AS PeriodEnd,
                a.number AS AccountNumber, a.name AS AccountName, a.type AS AccountType, s.name AS SubsidiaryName,
@@ -155,7 +149,9 @@ export const ANALYTIC_SETS = {
         JOIN account a ON a.tenant_id = b.tenant_id AND a.id = b.account_id
         JOIN accounting_period p ON p.tenant_id = b.tenant_id AND p.id = b.period_id
         JOIN subsidiary s ON s.tenant_id = b.tenant_id AND s.id = b.subsidiary_id
-        WHERE ${where} GROUP BY p.id, a.id, s.id ORDER BY ${orderBy}`, params)
+        WHERE ${where} GROUP BY p.id, a.id, s.id
+        ${having ? `HAVING ${having}` : ''}
+        ORDER BY ${orderBy}`, params)
         .map((r) => ({
           PeriodName: r.PeriodName, PeriodEnd: r.PeriodEnd, AccountNumber: r.AccountNumber,
           AccountName: r.AccountName, AccountType: r.AccountType, SubsidiaryName: r.SubsidiaryName,
@@ -179,10 +175,15 @@ export const ANALYTIC_SETS = {
       InvoiceNo: 't.txn_no', Date: 't.txn_date', CustomerName: 'c.name', CustomerNo: 'c.entity_no',
       Sku: 'i.sku', ItemName: 'i.name', Description: 'tl.description', Quantity: 'tl.quantity',
       UnitPrice: 'tl.unit_price', LineAmount: 'tl.amount', Cost: 'i.standard_cost',
-      Margin: 'tl.amount - (tl.quantity * i.standard_cost)',
+      // Quantity is stored scaled by QTY_SCALE and Cost by MONEY_SCALE, so the
+      // cost of a line is (quantity / QTY_SCALE) * cost -- the same division
+      // Qty.extend does in JS below. Leaving it out (as a plain
+      // `tl.quantity * i.standard_cost`) inflates Margin by QTY_SCALE.
+      Margin: `tl.amount - ROUND((tl.quantity / ${QTY_SCALE}.0) * i.standard_cost)`,
       SalesRep: '(e.first_name || \' \' || e.last_name)', LocationName: 'l.name',
       SubsidiaryName: 's.name', Status: 't.status',
     },
+    scale: { Quantity: QTY_SCALE, UnitPrice: MONEY_SCALE, LineAmount: MONEY_SCALE, Cost: MONEY_SCALE, Margin: MONEY_SCALE },
     rows(repo, { filter, order } = {}) {
       const params = [];
       let where = `tl.tenant_id = :t AND t.type = 'INVOICE' AND t.status != 'voided'`;
@@ -190,15 +191,7 @@ export const ANALYTIC_SETS = {
         const sql = filterToSql(filter, params);
         where += ` AND ${sql}`;
       }
-      let orderBy = `t.txn_date DESC`;
-      if (order) {
-        orderBy = order.split(',').map(p => {
-          const [name, dir] = p.trim().split(/\s+/);
-          const col = this.colMap[name];
-          if (!col) return null;
-          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
-        }).filter(Boolean).join(', ') || orderBy;
-      }
+      const orderBy = resolveOrderBy(order, this.colMap, `t.txn_date DESC`);
       return repo.query(`
         SELECT t.txn_no AS InvoiceNo, t.txn_date AS Date, t.status AS Status,
                c.name AS CustomerName, COALESCE(c.entity_no,'') AS CustomerNo,
@@ -242,6 +235,7 @@ export const ANALYTIC_SETS = {
       InvoiceNo: 't.txn_no', Date: 't.txn_date', DueDate: 't.due_date', CustomerName: 'c.name',
       Total: 't.total', Outstanding: 't.amount_remaining',
     },
+    scale: { Total: MONEY_SCALE, Outstanding: MONEY_SCALE },
     rows(repo, { filter, order } = {}) {
       const now = today();
       const params = [];
@@ -250,15 +244,7 @@ export const ANALYTIC_SETS = {
         const sql = filterToSql(filter, params);
         where += ` AND ${sql}`;
       }
-      let orderBy = `t.due_date`;
-      if (order) {
-        orderBy = order.split(',').map(p => {
-          const [name, dir] = p.trim().split(/\s+/);
-          const col = this.colMap[name];
-          if (!col) return null;
-          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
-        }).filter(Boolean).join(', ') || orderBy;
-      }
+      const orderBy = resolveOrderBy(order, this.colMap, `t.due_date`);
       return repo.query(`
         SELECT t.txn_no AS InvoiceNo, t.txn_date AS Date, t.due_date AS DueDate,
                COALESCE(c.name,'') AS CustomerName, t.total AS T, t.amount_remaining AS O
@@ -292,6 +278,10 @@ export const ANALYTIC_SETS = {
       OnOrder: 'il.qty_on_order', AverageCost: 'il.avg_cost', TotalValue: 'il.total_value',
       ReorderPoint: 'il.reorder_point', BelowReorder: 'il.qty_on_hand - il.qty_committed < il.reorder_point',
     },
+    scale: {
+      OnHand: QTY_SCALE, Committed: QTY_SCALE, Available: QTY_SCALE, OnOrder: QTY_SCALE, ReorderPoint: QTY_SCALE,
+      AverageCost: MONEY_SCALE, TotalValue: MONEY_SCALE,
+    },
     rows(repo, { filter, order } = {}) {
       const params = [];
       let where = `il.tenant_id = :t`;
@@ -299,15 +289,7 @@ export const ANALYTIC_SETS = {
         const sql = filterToSql(filter, params);
         where += ` AND ${sql}`;
       }
-      let orderBy = `i.sku, l.name`;
-      if (order) {
-        orderBy = order.split(',').map(p => {
-          const [name, dir] = p.trim().split(/\s+/);
-          const col = this.colMap[name];
-          if (!col) return null;
-          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
-        }).filter(Boolean).join(', ') || orderBy;
-      }
+      const orderBy = resolveOrderBy(order, this.colMap, `i.sku, l.name`);
       return repo.query(`
         SELECT i.sku AS Sku, i.name AS ItemName, l.name AS LocationName,
                il.qty_on_hand AS OH, il.qty_committed AS CM, il.qty_on_order AS OO,
@@ -340,6 +322,7 @@ export const ANALYTIC_SETS = {
       Amount: 'o.amount', Probability: 'o.probability', ExpectedClose: 'o.expected_close',
       ActualClose: 'o.actual_close', Owner: '(e.first_name || \' \' || e.last_name)',
     },
+    scale: { Amount: MONEY_SCALE },
     rows(repo, { filter, order } = {}) {
       const params = [];
       let where = `o.tenant_id = :t`;
@@ -347,15 +330,7 @@ export const ANALYTIC_SETS = {
         const sql = filterToSql(filter, params);
         where += ` AND ${sql}`;
       }
-      let orderBy = `o.expected_close`;
-      if (order) {
-        orderBy = order.split(',').map(p => {
-          const [name, dir] = p.trim().split(/\s+/);
-          const col = this.colMap[name];
-          if (!col) return null;
-          return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
-        }).filter(Boolean).join(', ') || orderBy;
-      }
+      const orderBy = resolveOrderBy(order, this.colMap, `o.expected_close`);
       return repo.query(`
         SELECT o.name AS Name, COALESCE(c.name,'') AS CustomerName, o.stage AS Stage,
                COALESCE(o.forecast_category,'') AS ForecastCategory,
@@ -473,10 +448,14 @@ export function parseFilter(expr, columnFor) {
     if (tok === 'null') return null;
     throw badRequest(`Expected a value in $filter but found "${tok}"`);
   };
+  // columnFor may answer with a bare SQL string, or with { sql, scale } when
+  // the column is stored as a scaled integer (money, quantity) and a numeric
+  // literal compared against it has to be scaled the same way -- otherwise
+  // "Amount gt 500" would compare 500 against a value stored as 50000.
   const column = (tok) => {
     const col = columnFor(tok);
     if (!col) throw badRequest(`Unknown field "${tok}" in $filter`);
-    return col;
+    return typeof col === 'string' ? { sql: col, scale: 1 } : { scale: 1, ...col };
   };
 
   const comparison = () => {
@@ -484,16 +463,16 @@ export function parseFilter(expr, columnFor) {
     if (/^(contains|startswith|endswith)$/i.test(peek() || '')) {
       const fn = take().toLowerCase();
       expect('(');
-      const col = column(take());
+      const { sql: col } = column(take());
       expect(',');
       const value = literal(take());
       expect(')');
       return { kind: 'like', col, fn, value: String(value) };
     }
-    const col = column(take());
+    const { sql: col, scale } = column(take());
     const op = String(take() || '').toLowerCase();
     if (!OPS.has(op)) throw badRequest(`Unsupported operator "${op}" in $filter`);
-    return { kind: 'cmp', col, op, value: literal(take()) };
+    return { kind: 'cmp', col, op, value: literal(take()), scale };
   };
   const andExpr = () => {
     let node = comparison();
@@ -511,6 +490,23 @@ export function parseFilter(expr, columnFor) {
   return ast;
 }
 
+/**
+ * Resolve $orderby against an analytic set's colMap, falling back to the
+ * set's own default order when $orderby is absent or names nothing colMap
+ * recognises. Shared by every analytic set's rows() rather than repeated in
+ * each one, so a fix here (or a column colMap gains) reaches all of them.
+ */
+function resolveOrderBy(order, colMap, fallback) {
+  if (!order) return fallback;
+  const resolved = order.split(',').map((p) => {
+    const [name, dir] = p.trim().split(/\s+/);
+    const col = colMap[name];
+    if (!col) return null;
+    return `${col} ${String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC'}`;
+  }).filter(Boolean).join(', ');
+  return resolved || fallback;
+}
+
 const SQL_OP = { eq: '=', ne: '!=', gt: '>', ge: '>=', lt: '<', le: '<=' };
 
 /** Compile a filter tree to parameterised SQL. */
@@ -523,7 +519,9 @@ export function filterToSql(ast, params = []) {
       return `${ast.col} LIKE ?`;
     case 'cmp': {
       if (ast.value === null) return `${ast.col} IS ${ast.op === 'eq' ? '' : 'NOT '}NULL`;
-      params.push(typeof ast.value === 'boolean' ? (ast.value ? 1 : 0) : ast.value);
+      const scaled = typeof ast.value === 'number' && ast.scale && ast.scale !== 1
+        ? Math.round(ast.value * ast.scale) : ast.value;
+      params.push(typeof scaled === 'boolean' ? (scaled ? 1 : 0) : scaled);
       return `${ast.col} ${SQL_OP[ast.op]} ?`;
     }
     default: throw badRequest('Unsupported $filter');
@@ -571,10 +569,18 @@ export function readSet(repo, access, setName, query = {}, baseUrl = '') {
   if (analytic) {
     if (rbac.levelFor(access, 'account') < rbac.LEVEL.VIEW) throw badRequest('Not permitted to read this feed');
     let rows = analytic.rows(repo, {
+      // Resolved the same way $orderby resolves a name: through colMap, to the
+      // real SQL expression behind the column -- not the PascalCase alias.
+      // Splicing the alias in worked by accident for a plain column, because
+      // SQLite falls back to matching a bare word in WHERE against a SELECT
+      // alias, but for an aggregate column (Amount, Debit, Credit, Balance)
+      // that fallback still leaves an aggregate sitting in WHERE, which SQLite
+      // refuses with "misuse of aggregate". colMap is what rows() below knows
+      // to route into HAVING instead.
       filter: query.$filter ? parseFilter(query.$filter, (f) => {
-        const cols = new Map(analytic.columns.map((c) => [c.name.toLowerCase(), c.name]));
-        cols.set('rowid', 'RowId');
-        return cols.get(String(f).toLowerCase());
+        if (String(f).toLowerCase() === 'rowid') return null; // synthesised after the query runs; cannot be filtered on
+        const sql = analytic.colMap[f];
+        return sql ? { sql, scale: analytic.scale?.[f] || 1 } : null;
       }) : null,
       order: query.$orderby,
     }).map((r, idx) => ({ RowId: idx + 1, ...r }));
@@ -606,7 +612,7 @@ export function readSet(repo, access, setName, query = {}, baseUrl = '') {
     where.push(filterToSql(ast, p));
     params.push(...p);
   }
-  const rowFilter = rbac.rowFilter(access, m.table, { alias: 'r' });
+  const rowFilter = rbac.rowFilter(access, m.table, { alias: 'r', db: repo.db });
   if (rowFilter?.sql) { where.push(rowFilter.sql); params.push(...(rowFilter.params || [])); }
 
   let orderBy = m.defaultSort ? `r.${m.defaultSort}` : 'r.id';

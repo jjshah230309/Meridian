@@ -311,7 +311,7 @@ async function reconciliationView(recId, go) {
 
   const stat = (label, value, cls = '') => h('div',
     h('div.muted', { style: { fontSize: '11px' } }, label.toUpperCase()),
-    h('div', { style: { fontSize: '17px', fontWeight: 650 }, class: cls }, value));
+    h('div', { style: { fontSize: '17px', fontWeight: 600 }, class: cls }, value));
 
   await load();
 

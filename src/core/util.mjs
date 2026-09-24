@@ -45,13 +45,26 @@ export function round(n) {                     // half away from zero
 }
 
 export const Money = {
-  /** Accepts 1234.56 | "1,234.56" | "$1234.56" -> 123456 */
+  /**
+   * Accepts 1234.56 | "1,234.56" | "$1234.56" -> 123456. Also recognizes the
+   * two standard accounting negative notations -- "(1,234.56)" and a trailing
+   * "1,234.56-" -- both common in bank/vendor exports. Neither survives the
+   * digit/dot/comma/minus filter below with its sign intact on its own: the
+   * parens are simply dropped (leaving a positive number), and parseFloat
+   * stops at a trailing "-" rather than failing, again reading as positive.
+   */
   parse(v) {
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return round(v * MONEY_SCALE);
-    const cleaned = String(v).replace(/[^0-9.,\-]/g, '').replace(/,/g, '');
+    let s = String(v).trim();
+    let negative = false;
+    const parens = s.match(/^[^\d(]*\((.*)\)$/);   // allow a leading "$" before "("
+    if (parens) { negative = true; s = parens[1]; }
+    else if (/-\s*$/.test(s)) { negative = true; s = s.replace(/-\s*$/, ''); }
+    const cleaned = s.replace(/[^0-9.,\-]/g, '').replace(/,/g, '');
     const n = Number.parseFloat(cleaned);
-    return Number.isFinite(n) ? round(n * MONEY_SCALE) : 0;
+    if (!Number.isFinite(n)) return 0;
+    return round((negative ? -Math.abs(n) : n) * MONEY_SCALE);
   },
   /** minor units -> Number for display/JSON. Safe: |cents| < 2^53. */
   toNumber: (c) => (c || 0) / MONEY_SCALE,
@@ -145,7 +158,17 @@ export const startOfMonth = (dateStr) => parseDate(dateStr).toISOString().slice(
 export function daysBetween(a, b) {
   return Math.round((parseDate(b).getTime() - parseDate(a).getTime()) / 86400000);
 }
-export function isValidDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + 'T00:00:00Z')); }
+/**
+ * `Date.parse` rolls a calendar-invalid date forward instead of rejecting it
+ * -- "2024-02-30" parses as March 1st rather than failing -- so a shape check
+ * plus a successful parse both pass for dates that don't exist. Re-rendering
+ * the parsed date and comparing it back to the input catches the rollover.
+ */
+export function isValidDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
 
 /** NET30 -> due date. */
 export function termsToDueDate(txnDate, terms) {

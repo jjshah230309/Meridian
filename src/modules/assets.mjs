@@ -227,22 +227,28 @@ export function runDepreciation(repo, { through = today(), dry_run = false } = {
       ...[...byExpense].map(([account_id, v]) => ({ account_id, debit: v, credit: 0, memo: 'Depreciation' })),
       ...[...byAccum].map(([account_id, v]) => ({ account_id, debit: 0, credit: v, memo: 'Accumulated depreciation' })),
     ];
-    const entry = gl.postJournal(repo, {
-      subsidiary_id, txn_date: depr_date,
-      memo: `Depreciation — ${rows.length} asset${rows.length === 1 ? '' : 's'}`,
-      source_type: 'depreciation', source_id: null, lines,
-    });
-    for (const r of rows) {
-      repo.update('depreciation_line', r.id, { posted: 1, journal_entry_id: entry.id });
-      const asset = getAsset(repo, r.asset_id);
-      const accum = asset.accumulated_depreciation + r.amount;
-      const done = accum >= asset.cost - asset.salvage_value;
-      repo.update('fixed_asset', r.asset_id, {
-        accumulated_depreciation: accum,
-        status: done ? 'fully_depreciated' : asset.status,
-        updated_at: new Date().toISOString(),
+    // Each subsidiary/date group is its own transaction, so one group failing
+    // (an account made inactive since the schedule was set up, say) cannot
+    // roll back groups this same run already posted.
+    const entry = repo.tx(() => {
+      const e = gl.postJournal(repo, {
+        subsidiary_id, txn_date: depr_date,
+        memo: `Depreciation — ${rows.length} asset${rows.length === 1 ? '' : 's'}`,
+        source_type: 'depreciation', source_id: null, lines,
       });
-    }
+      for (const r of rows) {
+        repo.update('depreciation_line', r.id, { posted: 1, journal_entry_id: e.id });
+        const asset = getAsset(repo, r.asset_id);
+        const accum = asset.accumulated_depreciation + r.amount;
+        const done = accum >= asset.cost - asset.salvage_value;
+        repo.update('fixed_asset', r.asset_id, {
+          accumulated_depreciation: accum,
+          status: done ? 'fully_depreciated' : asset.status,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      return e;
+    });
     entries.push({ id: entry.id, entry_no: entry.entry_no, date: depr_date, subsidiary_id, amount: Money.toNumber(amount), assets: rows.length });
     total += amount;
   }

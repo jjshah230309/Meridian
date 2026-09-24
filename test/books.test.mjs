@@ -377,3 +377,51 @@ test('none of this leaves a mark on the ledger', () => {
   assert.ok(after.integrity.ok, 'and it still is');
   assert.ok(after.integrity.ledger_balanced);
 });
+
+test('one asset failing does not roll back another asset already adjusted in the same run', () => {
+  // runBookDepreciation used to post every asset's adjustment inside one
+  // transaction (postAdjustment manages no transaction of its own), so an
+  // asset whose expense account went inactive rolled back adjustments this
+  // same run had already posted for a different, unrelated asset.
+  const f = freshTenant();
+  const b = ifrs(f);
+  const goodClass = f.tx(() => f.repo.insert('asset_class', {
+    id: ulid(), name: 'Plant A', method: 'STRAIGHT_LINE', life_months: 60,
+    asset_account_id: acct(f, '1500').id, accum_account_id: acct(f, '1590').id,
+    expense_account_id: acct(f, '6800').id, active: 1, created_at: nowIso(),
+  }));
+  const badClass = f.tx(() => f.repo.insert('asset_class', {
+    id: ulid(), name: 'Plant B', method: 'STRAIGHT_LINE', life_months: 60,
+    asset_account_id: acct(f, '1500').id, accum_account_id: acct(f, '1590').id,
+    expense_account_id: acct(f, '6100').id, active: 1, created_at: nowIso(),
+  }));
+  const good = f.tx(() => assets.createAsset(f.repo, {
+    name: 'Good press', class_id: goodClass, subsidiary_id: f.subsidiaryId,
+    acquisition_date: '2026-01-01', in_service_date: '2026-01-01', cost: 60000,
+  }));
+  const bad = f.tx(() => assets.createAsset(f.repo, {
+    name: 'Bad press', class_id: badClass, subsidiary_id: f.subsidiaryId,
+    acquisition_date: '2026-01-01', in_service_date: '2026-01-01', cost: 60000,
+  }));
+  f.tx(() => assets.placeInService(f.repo, good.id, { in_service_date: '2026-01-01' }));
+  f.tx(() => assets.placeInService(f.repo, bad.id, { in_service_date: '2026-01-01' }));
+  f.tx(() => assets.runDepreciation(f.repo, { through: '2026-01-31' }));
+
+  f.tx(() => books.setAssetRule(f.repo, { book_id: b.id, asset_id: good.id, life_months: 120 }));
+  f.tx(() => books.setAssetRule(f.repo, { book_id: b.id, asset_id: bad.id, life_months: 120 }));
+
+  // The bad asset's expense account goes inactive after both rules exist.
+  f.tx(() => f.repo.update('account', acct(f, '6100').id, { active: 0 }));
+
+  // Not wrapped in f.tx(): matches the fixed route, and is the point of the
+  // test -- wrapping it would turn the isolation back into savepoints that
+  // roll back together.
+  assert.throws(() => books.runBookDepreciation(f.repo, { book_id: b.id, through: '2026-01-31' }), /inactive/);
+
+  const goodPosted = f.repo.scalar(
+    "SELECT COUNT(*) c FROM book_adjustment WHERE tenant_id = :t AND book_id = ? AND source_id = ?", [b.id, good.id], 0);
+  assert.equal(goodPosted, 1, 'the good asset must still have its adjustment posted');
+  const badPosted = f.repo.scalar(
+    "SELECT COUNT(*) c FROM book_adjustment WHERE tenant_id = :t AND book_id = ? AND source_id = ?", [b.id, bad.id], 0);
+  assert.equal(badPosted, 0, 'the failing asset must not have posted');
+});

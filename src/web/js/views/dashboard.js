@@ -38,6 +38,21 @@ const WIDGETS = {
 const DEFAULT_LAYOUT = ['cash_balance', 'revenue_mtd', 'gross_margin', 'ar_overdue', 'open_orders', 'pipeline',
   'revenue_trend', 'ar_aging', 'top_customers', 'approvals_list', 'reorder', 'cases_list'];
 
+const KPI_ICONS = {
+  cash_balance: 'bank', revenue_mtd: 'trending-up', gross_margin: 'percent', net_income: 'ledger',
+  ar_overdue: 'clock', ap_due: 'wallet', dso: 'calendar', open_orders: 'shopping-cart',
+  pipeline: 'target', inventory: 'box', approvals: 'shield', cases: 'life-buoy',
+  headcount: 'users', current_ratio: 'layers',
+};
+
+/** Which accent colour each tile's icon badge takes -- by what the number means, not by rotation. */
+const KPI_TONE = {
+  cash_balance: '--pos', revenue_mtd: '--chrome-accent', gross_margin: '--chrome-accent', net_income: '--pos',
+  ar_overdue: '--neg', ap_due: '--warn', dso: '--info', open_orders: '--chrome-accent',
+  pipeline: '--chrome-accent', inventory: '--info', approvals: '--warn', cases: '--neg',
+  headcount: '--info', current_ratio: '--chrome-accent',
+};
+
 const changeMeta = (pct, suffix) => {
   if (pct === null || pct === undefined) return suffix;
   const up = pct >= 0;
@@ -102,7 +117,7 @@ export async function dashboardView(_r, { go }) {
   window.addEventListener('meridian:tour-progress', drawOnboarding);
 
   const el = h('div.page',
-    h('div.page-head',
+    h('div.page-head.hero',
       h('div.titles',
         h('h1', greeting(), ', ', store.state.user.name.split(' ')[0]),
         h('div.page-sub', `${store.state.tenant.name} · ${fmt.date(data.period.today)}`)),
@@ -189,12 +204,14 @@ const greeting = () => {
 
 function kpiTile(key, w, data, go) {
   const k = w.kpi(data);
+  const tone = KPI_TONE[key] || '--chrome-accent';
   const tile = h('div.kpi', { class: k.link ? 'linked' : '', onclick: k.link ? () => go(k.link) : null },
     h('div.drag', { title: 'Drag to rearrange' }, icon('grip', { size: 13 })),
+    h('div.icon-chip.on-dark.k-icon', { style: { color: `var(${tone})` } }, icon(KPI_ICONS[key] || 'file-text', { size: 16 })),
     h('div.k-label', w.title),
     h('div.k-value', { class: k.tone === 'neg' ? 'num-neg' : k.tone === 'warn' ? '' : '' }, k.value),
     h('div.k-meta', k.meta),
-    k.spark && h('div', { style: { marginTop: '6px', color: 'var(--accent)' } }, sparkline(k.spark)));
+    k.spark && h('div', { style: { marginTop: '6px', color: 'var(--chrome-accent)' } }, sparkline(k.spark)));
   if (k.tone === 'warn') tile.querySelector('.k-value').style.color = 'var(--warn)';
   return tile;
 }

@@ -22,11 +22,19 @@ export function configure({ level = 'INFO', stream = process.stdout } = {}) {
 
 let logStream = process.stdout;
 
+// Error.prototype.message/name/stack are non-enumerable, so JSON.stringify
+// on a bare Error produces "{}" and drops exactly the fields a log line
+// needs; pull them out explicitly and let any own enumerable fields a
+// subclass adds (status, code, detail...) come along with the spread.
+const formatArg = (a) => (a instanceof Error
+  ? JSON.stringify({ name: a.name, message: a.message, stack: a.stack, ...a }, null, 2)
+  : (typeof a === 'object' && a !== null ? JSON.stringify(a, null, 2) : a));
+
 function log(level, message, ...args) {
   if (level.rank < currentLevel.rank) return;
 
   const ts = nowIso();
-  const formattedArgs = args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : a).join(' ');
+  const formattedArgs = args.map(formatArg).join(' ');
   const line = `[${ts}] ${level.label} ${message} ${formattedArgs}`.trim();
 
   if (logStream && typeof logStream.write === 'function') {

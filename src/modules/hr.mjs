@@ -15,6 +15,7 @@ import * as audit from '../core/audit.mjs';
 import { indexRecord } from '../core/search.mjs';
 import * as gl from './gl.mjs';
 import { postingAccounts } from './setup.mjs';
+import * as platform from './platform.mjs';
 
 export const EMPLOYMENT_TYPES = ['full_time', 'part_time', 'contractor', 'intern'];
 export const PAY_FREQUENCIES = { weekly: 52, biweekly: 26, semimonthly: 24, monthly: 12 };
@@ -60,7 +61,7 @@ export function createEmployee(repo, input) {
     bank_last4: String(input.bank_last4 || '').slice(-4),
     provider_ref: input.provider_ref || '',
     pto_balance_hours: Number(input.pto_balance_hours || 0),
-    notes: input.notes || '', custom: input.custom || {}, created_at: now, updated_at: now,
+    notes: input.notes || '', custom: platform.validateCustom(repo, 'employee', input.custom || {}), created_at: now, updated_at: now,
   });
   audit.record(repo, { recordType: 'employee', recordId: id, action: 'create', after: { ...input, national_id_last4: undefined, bank_last4: undefined } });
   reindexEmployee(repo, id);
@@ -80,6 +81,7 @@ export function updateEmployee(repo, id, patch) {
     if (!allowed.includes(k)) continue;
     if (k === 'pay_rate') clean[k] = Money.parse(v);
     else if (k === 'national_id_last4' || k === 'bank_last4') clean[k] = String(v || '').slice(-4);
+    else if (k === 'custom') clean.custom = { ...(before.custom || {}), ...platform.validateCustom(repo, 'employee', v, { partial: true }) };
     else clean[k] = v;
   }
   // Guard against an org-chart cycle.
@@ -305,7 +307,8 @@ export function calculatePayroll(repo, input) {
 
   const settings = { employee_tax_pct: 22, employer_tax_pct: 7.65, ...(input.rates || {}) };
   const employees = repo.query(`SELECT * FROM employee WHERE tenant_id = :t AND subsidiary_id = ? AND status IN ('active','on_leave')
-      AND employment_type != 'contractor' AND (termination_date IS NULL OR termination_date >= ?)`, [subsidiaryId, input.period_start]);
+      AND employment_type != 'contractor' AND (termination_date IS NULL OR termination_date >= ?)
+      AND (hire_date IS NULL OR hire_date <= ?)`, [subsidiaryId, input.period_start, input.period_end]);
   if (!employees.length) throw unprocessable('No payable employees found for this subsidiary and period.');
 
   const now = nowIso();
@@ -313,20 +316,21 @@ export function calculatePayroll(repo, input) {
   const lines = [];
   for (const e of employees) {
     let gross;
+    let hours = 0;
     if (e.pay_type === 'salary') {
       gross = round(e.pay_rate / (PAY_FREQUENCIES[e.pay_frequency] || 12));
     } else {
-      const hrs = repo.scalar(`SELECT COALESCE(SUM(hours),0) h FROM time_entry
+      hours = repo.scalar(`SELECT COALESCE(SUM(hours),0) h FROM time_entry
           WHERE tenant_id = :t AND employee_id = ? AND entry_date BETWEEN ? AND ? AND status = 'approved'`,
         [e.id, input.period_start, input.period_end], 0);
-      gross = round(e.pay_rate * hrs);
+      gross = round(e.pay_rate * hours);
     }
     if (gross <= 0) continue;
     const employeeTax = Money.pct(gross, settings.employee_tax_pct);
     const employerTax = Money.pct(gross, settings.employer_tax_pct);
     const deductions = Money.parse(0);
     lines.push({
-      id: ulid(), employee_id: e.id, hours: 0, overtime_hours: 0,
+      id: ulid(), employee_id: e.id, hours, overtime_hours: 0,
       gross, employee_tax: employeeTax, employer_tax: employerTax, deductions,
       net: gross - employeeTax - deductions, department_id: e.department_id,
       earnings: { base: Money.toNumber(gross), pay_type: e.pay_type, frequency: e.pay_frequency },

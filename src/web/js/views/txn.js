@@ -76,7 +76,7 @@ export async function txnView(route, { go }) {
     h('div.page-head',
       h('div.titles',
         h('div.breadcrumb',
-          h('a', { href: `#/list/${permType}`, onclick: (e) => { e.preventDefault(); go(`/list/${permType}`); } }, cfg.label + 's')),
+          h('a', { href: `#/list/${permType}`, onclick: (e) => { e.preventDefault(); go(`/list/${permType}`); } }, cfg.label + 's'), ' / ', h('span', { style: { fontWeight: 500 } }, `${cfg.label || t.type} ${t.txn_no}`)),
         h('h1', `${cfg.label || t.type} ${t.txn_no}`, statusTag(t.status),
           t.approval_status === 'pending' ? h('span.tag.amber', 'Awaiting approval') : null,
           t.posted ? h('span.tag.green', 'Posted') : h('span.tag', 'Not posted')),
@@ -615,7 +615,7 @@ export async function txnEditor(route, { go }) {
         h('div.breadcrumb', h('a', { href: `#/list/${permType}`, onclick: (ev) => { ev.preventDefault(); go(`/list/${permType}`); } }, cfg.label + 's')),
         h('h1', editing ? `Edit ${cfg.label.toLowerCase()} ${existing.txn_no}` : `New ${cfg.label.toLowerCase()}`)),
       h('div.page-actions',
-        h('button.btn', { onclick: () => go(editing ? `/txn/${existingId}` : `/list/${permType}`) }, 'Cancel'),
+        h('button.btn', { onclick: () => go(editing ? `/txn/${existingId}` : `/list/${permType}`) }, icon('arrow-left', { size: 14 }), 'Cancel'),
         h('button.btn.primary', { onclick: (ev) => save(ev) }, editing ? 'Save changes' : `Create ${cfg.label.toLowerCase()}`))),
 
     h('div.card', h('div.card-head', h('h2', 'Header')), h('div.card-body', headerHost, creditBox)),

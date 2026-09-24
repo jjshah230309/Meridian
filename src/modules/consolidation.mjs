@@ -134,7 +134,13 @@ export function consolidatedTrialBalance(repo, { periodIds, parentSubsidiaryId =
 
   const totalDebit = lines.reduce((s, a) => s + a.debit, 0);
   const totalCredit = lines.reduce((s, a) => s + a.credit, 0);
-  const cta = round((totalCredit - totalDebit) * 100);
+  // Translating asset/liability accounts at the closing rate and equity at
+  // the historical rate is exactly what leaves totalDebit and totalCredit
+  // unequal -- that gap IS the adjustment, credited to equity so the group
+  // balance sheet balances again: assets (debit) = liabilities + equity
+  // (credit) + CTA, so CTA has to be debit minus credit, not the other way
+  // around.
+  const cta = round((totalDebit - totalCredit) * 100);
 
   return {
     group_currency: groupCurrency,

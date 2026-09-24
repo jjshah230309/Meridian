@@ -365,9 +365,9 @@ export const formatAddress = (a) => {
   return [a.line1, a.line2, a.city, a.state, a.postcode, a.country].filter(Boolean).join(', ') || '—';
 };
 
-export const empty = (title, message, action, iconName = 'inbox') =>
+export const empty = (title, message, action, iconName = 'inbox', tone = '--text-faint') =>
   h('div.empty',
-    h('div.big', icon(iconName, { size: 21 })),
+    h('div.icon-chip.lg.big', { style: { color: `var(${tone})` } }, icon(iconName, { size: 22 })),
     h('div.t', title),
     message && h('div', message),
     action && h('div', { style: { marginTop: 'var(--s4)' } }, action));

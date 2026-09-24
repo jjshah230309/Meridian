@@ -298,11 +298,12 @@ export const FUNCTIONS = {
   },
   FV: (rate, nper, pmt, pv = 0) => {
     const r = toNum(rate) / 12; const n = toNum(nper); const p = toNum(pmt); const v = toNum(pv);
-    return v * Math.pow(1 + r, n) + p * (Math.pow(1 + r, n) - 1) / r;
+    // (Math.pow(1+r, n) - 1) / r is 0/0 at r === 0, same as PMT above.
+    return r === 0 ? v + p * n : v * Math.pow(1 + r, n) + p * (Math.pow(1 + r, n) - 1) / r;
   },
   PV: (rate, nper, pmt, fv = 0) => {
     const r = toNum(rate) / 12; const n = toNum(nper); const p = toNum(pmt); const v = toNum(fv);
-    return (v + p * (Math.pow(1 + r, n) - 1) / r) / Math.pow(1 + r, n);
+    return r === 0 ? v + p * n : (v + p * (Math.pow(1 + r, n) - 1) / r) / Math.pow(1 + r, n);
   },
 
 };

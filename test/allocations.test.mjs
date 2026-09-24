@@ -108,6 +108,45 @@ test('a statistical split follows what the statistics say', () => {
   assert.match(view.lines[0].basis_label, /12 people/);
 });
 
+test('a later statistical reading replaces the earlier one, not adds to it', () => {
+  // postStatistic's own doc comment calls this "this month's headcount" -- a
+  // reading, not a delta. weightsFor used to sum every reading ever posted
+  // with no lower date bound, so a second month's headcount posting kept
+  // adding onto the first month's instead of superseding it.
+  const f = freshTenant();
+  const [sales, ops] = departments(f, ['Sales', 'Ops']);
+  const headcount = f.tx(() => gl.createAccount(f.repo, {
+    number: '9100', name: 'Headcount', type: 'EXPENSE', subtype: 'OPERATING_EXPENSE',
+    is_statistical: 1, statistical_unit: 'people',
+  }));
+  f.tx(() => allocations.postStatistic(f.repo, {
+    account_id: headcount.id, subsidiary_id: f.subsidiaryId, txn_date: '2026-03-01',
+    entries: [{ department_id: sales, quantity: 12 }, { department_id: ops, quantity: 28 }],
+  }));
+  // Headcount changed for April: now an even split.
+  f.tx(() => allocations.postStatistic(f.repo, {
+    account_id: headcount.id, subsidiary_id: f.subsidiaryId, txn_date: '2026-04-01',
+    entries: [{ department_id: sales, quantity: 20 }, { department_id: ops, quantity: 20 }],
+  }));
+  bookRent(f, 4000, '2026-04-30');
+
+  const schedule = f.tx(() => allocations.createSchedule(f.repo, {
+    name: 'Rent by headcount', subsidiary_id: f.subsidiaryId, method: 'statistical',
+    start_date: '2026-03-31',
+    sources: [{ account_id: acct(f, '6100').id }],
+    targets: [
+      { department_id: sales, statistical_account_id: headcount.id },
+      { department_id: ops, statistical_account_id: headcount.id },
+    ],
+  }));
+
+  const april = allocations.preview(f.repo, schedule.id, { txn_date: '2026-04-30' });
+  assert.deepEqual(april.lines.map((l) => l.weight), [20, 20],
+    'April must read as an even split, not 12+20 / 28+20 carried over from March');
+  assert.equal(april.lines[0].amount, Money.parse(2000));
+  assert.equal(april.lines[1].amount, Money.parse(2000));
+});
+
 test('a statistical account is kept out of the financial statements', async () => {
   const f = freshTenant();
   const [sales] = departments(f, ['Sales']);

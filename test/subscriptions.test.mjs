@@ -10,6 +10,7 @@ import * as entities from '../src/modules/entities.mjs';
 import * as inv from '../src/modules/inventory.mjs';
 import * as schedules from '../src/modules/schedules.mjs';
 import * as gl from '../src/modules/gl.mjs';
+import * as txnMod from '../src/modules/txn.mjs';
 import { Money, Qty } from '../src/core/util.mjs';
 
 const acct = (f, n) => f.repo.queryOne('SELECT * FROM account WHERE tenant_id = :t AND number = ?', [n]);
@@ -492,4 +493,61 @@ test('a line cannot start before the subscription it is on', () => {
     customer_id: customer.id, start_date: '2026-01-01',
     lines: [{ item_id: item.id, quantity: 1, unit_price: 10, start_date: '2025-06-01' }],
   }))).fields['lines.0.start_date'], /cannot start before/);
+});
+
+test('an invoice never diverges by a rounded cent from what was previewed and recorded', () => {
+  // A prorated charge on 3 seats at $0.11 rarely divides evenly into a whole
+  // number of cents per seat. createTxn recomputes the line as
+  // quantity x unit_price, so a rounded per-seat rate could post a different
+  // total than the amount previewNext showed and subscription_billing
+  // recorded -- the very thing subscription_billing exists to guarantee
+  // against double- (or wrong-) billing.
+  const f = freshTenant();
+  const item = seat(f, { price: 0.11 });
+  const { subscription } = subscribe(f, {
+    start_date: '2026-01-01', billing_day: 6, term_months: 12,
+    lines: [{ item_id: item.id, quantity: 3, unit_price: 0.11 }],
+  });
+  const preview = subs.previewNext(f.repo, subscription.id, { through: '2026-01-06' });
+  assert.ok(preview.ready);
+  const previewedAmount = preview.total;
+
+  // Not wrapped in f.tx(): runBilling commits each subscription's invoice in
+  // its own transaction.
+  const run = subs.runBilling(f.repo, { through: '2026-01-06' });
+  assert.equal(run.invoiced.length, 1);
+  const invoiceId = run.invoiced[0].invoice_id;
+  const billedTotal = f.repo.scalar(
+    'SELECT COALESCE(SUM(amount),0) v FROM subscription_billing WHERE tenant_id = :t AND invoice_txn_id = ?', [invoiceId], 0);
+  const invoice = txnMod.getTxn(f.repo, invoiceId);
+
+  assert.equal(billedTotal, previewedAmount, 'what was recorded must match what was previewed');
+  assert.equal(invoice.total, billedTotal, 'the actual invoice must total exactly what was recorded as billed');
+});
+
+test('one subscription over its credit limit does not roll back another already billed', () => {
+  // runBilling used to bill every due subscription inside one transaction,
+  // so a customer over their credit limit rolled back invoices this same
+  // run had already generated for a different, unrelated customer.
+  const f = freshTenant();
+  const item = seat(f);
+  const { subscription: goodSub } = subscribe(f, {
+    name: 'Good Co', lines: [{ item_id: item.id, quantity: 1, unit_price: 30 }],
+  });
+  const badCustomer = f.tx(() => entities.createCustomer(f.repo, {
+    name: 'Bad Co', subsidiary_id: f.subsidiaryId, credit_limit: 1,
+  }));
+  const { subscription: badSub } = subscribe(f, { customer: badCustomer, item, lines: [{ item_id: item.id, quantity: 1, unit_price: 30 }] });
+
+  // Not wrapped in f.tx(): matches the fixed route, and is the whole point
+  // of the test -- wrapping it would turn the isolation back into savepoints
+  // that roll back together.
+  assert.throws(() => subs.runBilling(f.repo, { through: '2026-01-31' }), /credit limit/);
+
+  const goodInvoiced = f.repo.scalar(
+    "SELECT COUNT(*) c FROM txn WHERE tenant_id = :t AND type = 'INVOICE' AND subscription_id = ?", [goodSub.id], 0);
+  assert.equal(goodInvoiced, 1, 'the good subscription must still have been invoiced');
+  const badInvoiced = f.repo.scalar(
+    "SELECT COUNT(*) c FROM txn WHERE tenant_id = :t AND type = 'INVOICE' AND subscription_id = ?", [badSub.id], 0);
+  assert.equal(badInvoiced, 0, 'the subscription over its credit limit must not have been invoiced');
 });

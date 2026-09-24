@@ -6,6 +6,7 @@ import { nextNumber } from '../core/seq.mjs';
 import * as audit from '../core/audit.mjs';
 import { indexRecord, unindexRecord } from '../core/search.mjs';
 import * as meta from './meta.mjs';
+import * as platform from './platform.mjs';
 
 export const TERMS = ['DUE_ON_RECEIPT', 'NET7', 'NET10', 'NET15', 'NET30', 'NET45', 'NET60', 'NET90'];
 
@@ -55,7 +56,7 @@ export function createCustomer(repo, input) {
     tax_number: input.tax_number || '', tax_code: input.tax_code || 'STANDARD',
     sales_rep_id: input.sales_rep_id || null, owner_id: input.owner_id || repo.ctx?.user?.id || null,
     status: input.status || 'active', source: input.source || '', notes: input.notes || '',
-    custom: input.custom || {}, created_at: now, updated_at: now,
+    custom: platform.validateCustom(repo, 'customer', input.custom || {}), created_at: now, updated_at: now,
     ...meta.cleanPatch('customer', input, { skip: KNOWN_CUSTOMER_FIELDS }),
   });
   audit.record(repo, { recordType: 'customer', recordId: id, action: 'create', after: input });
@@ -67,7 +68,11 @@ export function updateCustomer(repo, id, patch) {
   const before = getCustomer(repo, id);
   if (patch.email !== undefined && !emailOk(patch.email)) throw new ValidationError({ email: 'Enter a valid email address' });
   const clean = meta.cleanPatch('customer', patch);
-  if (patch.custom !== undefined) clean.custom = patch.custom;
+  // Merge onto the existing blob (a patch naming one custom field must not
+  // blank the rest) and coerce it the same way every other write path does,
+  // or a money/qty custom field is stored in the wrong units and a saved
+  // search filtering on it never matches.
+  if (patch.custom !== undefined) clean.custom = { ...(before.custom || {}), ...platform.validateCustom(repo, 'customer', patch.custom, { partial: true }) };
   // Changing the currency of a customer with open documents would restate them.
   if (clean.currency && clean.currency !== before.currency) {
     const open = repo.scalar(`SELECT COUNT(*) c FROM txn WHERE tenant_id = :t AND entity_type='customer' AND entity_id = ?
@@ -158,7 +163,7 @@ export function createVendor(repo, input) {
     tax_number: input.tax_number || '', is_1099: input.is_1099 ? 1 : 0,
     payables_account_id: input.payables_account_id || null, expense_account_id: input.expense_account_id || null,
     lead_time_days: Number(input.lead_time_days || 7), status: input.status || 'active',
-    notes: input.notes || '', custom: input.custom || {}, created_at: now, updated_at: now,
+    notes: input.notes || '', custom: platform.validateCustom(repo, 'vendor', input.custom || {}), created_at: now, updated_at: now,
     // Anything else the registry says is writable -- payment method, bank
     // reference, the collections settings -- rather than a second list here
     // that has to be remembered every time a field is added.
@@ -172,7 +177,7 @@ export function createVendor(repo, input) {
 export function updateVendor(repo, id, patch) {
   const before = getVendor(repo, id);
   const clean = meta.cleanPatch('vendor', patch);
-  if (patch.custom !== undefined) clean.custom = patch.custom;
+  if (patch.custom !== undefined) clean.custom = { ...(before.custom || {}), ...platform.validateCustom(repo, 'vendor', patch.custom, { partial: true }) };
   clean.updated_at = nowIso();
   repo.update('vendor', id, clean);
   const after = getVendor(repo, id);
@@ -212,7 +217,7 @@ export function createContact(repo, input) {
     title: input.title || '', company_type: input.company_type || 'customer',
     company_id: input.company_id || null, is_primary: input.is_primary ? 1 : 0,
     owner_id: input.owner_id || repo.ctx?.user?.id || null, status: input.status || 'active',
-    notes: input.notes || '', custom: input.custom || {}, created_at: now, updated_at: now,
+    notes: input.notes || '', custom: platform.validateCustom(repo, 'contact', input.custom || {}), created_at: now, updated_at: now,
   });
   // Only one primary contact per company.
   if (input.is_primary && input.company_id) {
@@ -230,6 +235,7 @@ export function updateContact(repo, id, patch) {
   const allowed = ['first_name', 'last_name', 'email', 'phone', 'mobile', 'title', 'company_type',
     'company_id', 'is_primary', 'owner_id', 'status', 'notes', 'custom'];
   const clean = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)));
+  if (clean.custom !== undefined) clean.custom = { ...(before.custom || {}), ...platform.validateCustom(repo, 'contact', clean.custom, { partial: true }) };
   clean.updated_at = nowIso();
   repo.update('contact', id, clean);
   if (clean.is_primary) {

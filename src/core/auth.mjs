@@ -99,16 +99,20 @@ export const csrfValid = (secret, sessionId, presented) =>
 // ----------------------------------------------------------- login flow
 export function authenticate(db, { tenantId, email, password, ip, userAgent }) {
   const user = db.prepare('SELECT * FROM app_user WHERE tenant_id = ? AND lower(email) = lower(?)').get(tenantId, String(email || ''));
-  if (!user) {
-    // Equalise timing so a missing account is indistinguishable from a bad password.
-    crypto.scryptSync('decoy', 'decoy', SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p });
-    return { ok: false, reason: 'invalid_credentials' };
-  }
+  // Verify the password (or a decoy hash of identical cost) before branching
+  // on account state. Disabled and locked accounts used to skip this and
+  // return immediately, so they answered measurably faster than a wrong
+  // password or a missing account -- letting an unauthenticated caller learn
+  // which of the four cases applies from timing alone, on top of the reason.
+  const passwordOk = user
+    ? verifyPassword(password, user.password_hash, user.password_salt)
+    : (crypto.scryptSync('decoy', 'decoy', SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p }), false);
+  if (!user) return { ok: false, reason: 'invalid_credentials' };
   if (user.status !== 'active') return { ok: false, reason: 'account_disabled' };
   if (user.locked_until && Date.parse(user.locked_until) > Date.now()) {
     return { ok: false, reason: 'account_locked', until: user.locked_until };
   }
-  if (!verifyPassword(password, user.password_hash, user.password_salt)) {
+  if (!passwordOk) {
     const failed = (user.failed_logins || 0) + 1;
     const lock = failed >= MAX_FAILED_LOGINS ? new Date(Date.now() + LOCKOUT_MINUTES * 60000).toISOString() : null;
     db.prepare('UPDATE app_user SET failed_logins = ?, locked_until = ? WHERE tenant_id = ? AND id = ?')

@@ -60,7 +60,7 @@ export async function learnView(_route, { go }) {
             }, 'Clear'))),
         h('div.card-body',
           h('div.progress', { style: { marginBottom: 'var(--s3)' } }, h('i', { style: { width: `${pct}%` } })),
-          h('div.track-list', ...tours.map((t) => tourRow(t, done.includes(t.id)))))),
+          h('div.track-list', ...tours.map((t, i) => tourRow(t, done.includes(t.id), i))))),
 
       // ---- reading
       h('div.card',
@@ -97,12 +97,21 @@ export async function learnView(_route, { go }) {
             h('button.btn', { onclick: () => go('/help/12-server') }, icon('database', { size: 14 }), 'Running it on a server')))));
   }
 
-  function tourRow(t, isDone) {
+  // Cosmetic variety, not semantics -- unlike a KPI's tone, one tour is not
+  // "worse" than another, so the colours just rotate to keep the list from
+  // reading as one long grey column. Classes, not an inline custom property:
+  // this `h()` sets styles via `Object.assign(el.style, ...)`, which cannot
+  // define a `--custom-property` on an element (confirmed empirically --
+  // silently does nothing), only set a real CSS property directly.
+  const TRACK_TONES = ['tone-accent', 'tone-info', 'tone-pos', 'tone-warn'];
+
+  function tourRow(t, isDone, index = 0) {
     return h('button.track', {
       class: isDone ? 'done' : '',
       onclick: () => startTour(t.id),
     },
-      h('div.track-icon', icon(isDone ? 'check' : (t.icon || 'play'), { size: 16 })),
+      h(`div.icon-chip.lg.track-icon.${isDone ? 'tone-pos' : TRACK_TONES[index % TRACK_TONES.length]}`,
+        icon(isDone ? 'check' : (t.icon || 'play'), { size: 17 })),
       h('div.track-body',
         h('div.track-title', t.title, isDone && h('span.tag.green', 'Done')),
         h('div.track-sub', t.blurb)),
@@ -115,14 +124,14 @@ export async function learnView(_route, { go }) {
   const chapterRow = (go) => ([id, title, sub]) => h('button.track', {
     onclick: () => go(`/help/${id}`),
   },
-    h('div.track-icon', icon('file-text', { size: 15 })),
+    h('div.icon-chip.lg.track-icon', icon('file-text', { size: 16 })),
     h('div.track-body',
       h('div.track-title', title),
       h('div.track-sub', sub)),
     h('div.track-meta', icon('chevron-right', { size: 15 })));
 
   const wayRow = (ic, title, sub, keys) => h('div.row', { style: { alignItems: 'flex-start', gap: 'var(--s3)' } },
-    h('div.track-icon', icon(ic, { size: 15 })),
+    h('div.icon-chip.lg.track-icon', icon(ic, { size: 16 })),
     h('div', { style: { minWidth: 0 } },
       h('div.track-title', title, keys && shortcuts.renderKeys(keys)),
       h('div.track-sub', sub)));

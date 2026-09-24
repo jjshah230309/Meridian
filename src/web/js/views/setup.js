@@ -90,7 +90,7 @@ async function usersTab(go) {
   const rows = users.map((u) => h('tr',
     h('td', h('div.row', { style: { gap: '8px' } },
       h('div.avatar', { style: { width: '24px', height: '24px', fontSize: '10px' } }, fmt.initials(u.name)),
-      h('div', h('div', { style: { fontWeight: 550 } }, u.name), h('div.faint', { style: { fontSize: '11.5px' } }, u.email)))),
+      h('div', h('div', { style: { fontWeight: 500 } }, u.name), h('div.faint', { style: { fontSize: '11.5px' } }, u.email)))),
     h('td', u.is_owner ? h('span.tag.blue', 'Owner') : ''),
     h('td', h('div.row.wrap', { style: { gap: '4px' } }, ...u.roles.map((r) => h('span.tag', r.name)))),
     h('td', statusTag(u.status)),
@@ -178,7 +178,7 @@ async function rolesTab() {
       style: { padding: '9px 13px', borderLeft: '2px solid transparent' },
     },
       h('div', { style: { minWidth: 0 } },
-        h('div', { style: { fontWeight: 550, color: 'var(--text)' } }, r.name),
+        h('div', { style: { fontWeight: 500, color: 'var(--text)' } }, r.name),
         h('div.faint', { style: { fontSize: '11.5px', whiteSpace: 'normal' } }, r.description)),
       h('span.count', String(r.user_count))))));
 

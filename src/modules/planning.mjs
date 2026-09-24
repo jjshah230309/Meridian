@@ -264,14 +264,18 @@ export function actionSuggestions(repo, ids, { txn_date = today() } = {}) {
     throw unprocessable(`${missingVendor.length} item${missingVendor.length === 1 ? ' has' : 's have'} no preferred vendor, so no purchase order can be raised for them.`);
   }
 
-  return repo.tx(() => {
-    const byVendor = new Map();
-    for (const r of purchases) {
-      if (!byVendor.has(r.vendor_id)) byVendor.set(r.vendor_id, []);
-      byVendor.get(r.vendor_id).push(r);
-    }
-    const created = [];
-    for (const [vendorId, group] of byVendor) {
+  const byVendor = new Map();
+  for (const r of purchases) {
+    if (!byVendor.has(r.vendor_id)) byVendor.set(r.vendor_id, []);
+    byVendor.get(r.vendor_id).push(r);
+  }
+  const created = [];
+  // Each vendor's purchase order is its own transaction, so one vendor's
+  // order failing (a closed period, a data issue specific to one item)
+  // cannot roll back orders this same call already raised for another,
+  // unrelated vendor.
+  for (const [vendorId, group] of byVendor) {
+    repo.tx(() => {
       const po = txnMod.createTxn(repo, 'PURCHASE_ORDER', {
         entity_id: vendorId, txn_date,
         location_id: group[0].location_id,
@@ -283,7 +287,9 @@ export function actionSuggestions(repo, ids, { txn_date = today() } = {}) {
       });
       for (const g of group) repo.update('supply_suggestion', g.id, { status: 'actioned', created_txn_id: po.id });
       created.push({ vendor_id: vendorId, txn_no: po.txn_no, id: po.id, lines: group.length });
-    }
+    });
+  }
+  return repo.tx(() => {
     const builds = rows.filter((r) => r.suggestion === 'manufacture');
     for (const b of builds) repo.update('supply_suggestion', b.id, { status: 'actioned' });
     audit.record(repo, { recordType: 'supply_suggestion', recordId: rows[0].run_id, action: 'action', changes: { count: { from: 0, to: rows.length } } });

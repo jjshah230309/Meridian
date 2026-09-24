@@ -334,7 +334,11 @@ function textOf(siInner) {
 
 function parseSharedStrings(xml) {
   if (!xml) return [];
-  return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1]));
+  // A self-closed `<si/>` (an empty shared-string entry) has to match too --
+  // every other tag in this file handles the self-closing form -- because
+  // missing one shifts every later `t="s"` cell's string index by one,
+  // corrupting the rest of the sheet's text rather than just that one cell.
+  return [...xml.matchAll(/<si\b[^>]*\/>|<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1] || ''));
 }
 
 /**

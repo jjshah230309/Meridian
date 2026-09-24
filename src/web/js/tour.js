@@ -929,7 +929,7 @@ export function showWelcome() {
         first && h('button.track', {
           onclick: () => { m.close(null); startTour(first.id); },
         },
-          h('div.track-icon', icon('play', { size: 15 })),
+          h('div.icon-chip.lg.track-icon', icon('play', { size: 16 })),
           h('div.track-body',
             h('div.track-title', 'Show me around'),
             h('div.track-sub', `${first.title} — about ${first.minutes} minutes, on your own data.`)),
@@ -937,7 +937,7 @@ export function showWelcome() {
         h('button.track', {
           onclick: () => { m.close(null); window.__meridianGo?.('/learn'); },
         },
-          h('div.track-icon', icon('graduation-cap', { size: 15 })),
+          h('div.icon-chip.lg.track-icon', icon('graduation-cap', { size: 16 })),
           h('div.track-body',
             h('div.track-title', 'Show me the full set of walkthroughs'),
             h('div.track-sub', `${tours.length} guided tours: a sale end to end, a purchase, a month-end close, reporting, and how to customise it.`)),

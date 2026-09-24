@@ -270,3 +270,35 @@ test('a template that never ran is deleted along with its lines', () => {
   assert.equal(f.repo.scalar('SELECT COUNT(*) c FROM recurring_journal_line WHERE tenant_id = :t', [], 0), 0,
     'no orphan lines left behind');
 });
+
+test('a run posts every healthy template even when a different one fails', () => {
+  // generate() commits each template's occurrences in its own transaction,
+  // so a run is not called from inside an outer f.tx() here -- that is
+  // exactly the scenario the fix is for. Wrapping this call in one
+  // transaction (as the API route used to) would merge every template's
+  // postings into it and roll all of them back the moment any one throws.
+  const f = freshTenant();
+  const good = rent(f);
+  const bad = f.tx(() => recurring.createRecurring(f.repo, {
+    name: 'Utilities', subsidiary_id: f.subsidiaryId,
+    frequency: 'monthly', day_rule: 'day_of_month', day_of_month: 1,
+    start_date: '2026-01-01',
+    lines: [
+      { account_id: acct(f, '6110'), debit: 1450 },
+      { account_id: acct(f, '1010'), credit: 1450 },
+    ],
+  }));
+  // Deactivating the account after the template exists is what makes this
+  // template's own posting fail once generate() reaches it.
+  f.tx(() => f.repo.exec('UPDATE account SET active = 0 WHERE tenant_id = :t AND id = ?', [acct(f, '6110')]));
+
+  const err = thrown(() => recurring.generate(f.repo, { through: '2026-01-31' }));
+  assert.ok(err, 'the run must still surface the failure');
+
+  assert.equal(dates(f, good.id).length, 1, 'the healthy template must still have posted');
+  assert.equal(balance(f, '6100'), Money.parse(8500));
+  assert.equal(recurring.getRecurring(f.repo, good.id).next_date, '2026-02-01',
+    'its own next_date must have advanced along with its posting');
+  assert.equal(dates(f, bad.id).length, 0, 'the failing template must not have posted anything');
+  assert.equal(gl.integrityCheck(f.repo).ok, true);
+});
