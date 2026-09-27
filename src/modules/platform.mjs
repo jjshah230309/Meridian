@@ -11,11 +11,11 @@
 // never as code we hand to the JavaScript engine. That is what keeps one
 // tenant's automation from becoming another tenant's incident.
 import { ulid, nowIso, today, Money, Qty, addDays, safeJson, sum } from '../core/util.mjs';
-import { notFound, unprocessable, badRequest, ValidationError, HttpError } from '../core/http.mjs';
+import { notFound, unprocessable, badRequest, forbidden, ValidationError, HttpError } from '../core/http.mjs';
 import { compile, evalSafe, test as exprTest, validate as validateExpr, truthy } from '../core/expr.mjs';
 import * as audit from '../core/audit.mjs';
 import { getMeta, fieldMap, RECORDS, listRecordTypes, REF_LABEL, refTypeFor } from './meta.mjs';
-import { rowFilter } from '../core/rbac.mjs';
+import { rowFilter, levelFor, LEVEL } from '../core/rbac.mjs';
 
 // =====================================================================
 // CUSTOM FIELDS
@@ -369,6 +369,15 @@ export function updateSavedSearch(repo, id, patch) {
   const before = repo.get('saved_search', id);
   if (!before) throw notFound('Saved search not found');
   if (before.is_system) throw unprocessable('Built-in searches cannot be modified. Save a copy instead.');
+  // Anyone with EDIT on saved_search could otherwise silently rewrite
+  // someone else's private search -- the create side already scopes a
+  // search to its owner (saveSearch, above), but nothing checked that on
+  // update. FULL still overrides, the same escalation every other owned
+  // record in this codebase allows.
+  const userId = repo.ctx?.user?.id || null;
+  if (before.owner_id && before.owner_id !== userId && levelFor(repo.ctx?.access, 'saved_search') < LEVEL.FULL) {
+    throw forbidden('Only the owner of this search, or someone with full access, can change it.');
+  }
   if (patch.definition) runSearch(repo, patch.record_type || before.record_type, patch.definition, { limit: 1 });
   repo.update('saved_search', id, {
     name: patch.name ?? before.name, definition: patch.definition ?? before.definition,

@@ -16,6 +16,7 @@ import * as meta from './modules/meta.mjs';
 import * as gl from './modules/gl.mjs';
 import * as inv from './modules/inventory.mjs';
 import * as lotsMod from './modules/lots.mjs';
+import * as pivot from './modules/pivot.mjs';
 import * as entities from './modules/entities.mjs';
 import * as T from './modules/txn.mjs';
 import * as crm from './modules/crm.mjs';
@@ -918,6 +919,18 @@ export function buildApi({ config }) {
   r.get(`${P}/reports/top-items`, async (ctx) => { reportGuard(ctx); return { rows: reports.topItems(ctx.repo, { limit: int(ctx.query.limit, 10), days: int(ctx.query.days, 365) }) }; });
   r.get(`${P}/reports/integrity`, async (ctx) => { reportGuard(ctx); return gl.integrityCheck(ctx.repo); });
   r.get(`${P}/reports/drilldown/:metric`, async (ctx) => { reportGuard(ctx); return { rows: reports.drillDown(ctx.repo, ctx.params.metric, {}) }; });
+
+  // ------------------------------------------------------- pivot / custom
+  // No blanket permission check here: which datasets a caller may even see
+  // is per-dataset (a record type's own permission, or 'account' for an
+  // analytic set), enforced inside listDatasets/runPivot itself.
+  r.get(`${P}/reports/datasets`, async (ctx) => ({ datasets: pivot.listDatasets(ctx.repo, ctx.access) }));
+  r.post(`${P}/reports/pivot`, async (ctx) => pivot.runPivot(ctx.repo, ctx.access, ctx.body || {}));
+  r.get(`${P}/reports/custom`, async (ctx) => ({ reports: pivot.listReports(ctx.repo) }));
+  r.get(`${P}/reports/custom/:id`, async (ctx) => pivot.getReport(ctx.repo, ctx.params.id));
+  r.post(`${P}/reports/custom`, async (ctx) => ctx.tx(() => pivot.createReport(ctx.repo, ctx.body || {})));
+  r.patch(`${P}/reports/custom/:id`, async (ctx) => ctx.tx(() => pivot.updateReport(ctx.repo, ctx.params.id, ctx.body || {})));
+  r.delete(`${P}/reports/custom/:id`, async (ctx) => ctx.tx(() => pivot.deleteReport(ctx.repo, ctx.params.id)));
 
   // ----------------------------------------------------------------- bank
   r.get(`${P}/bank/accounts`, async (ctx) => { rbac.require$(ctx.access, 'bank_account', LEVEL.VIEW); return { accounts: bank.listBankAccounts(ctx.repo), position: bank.cashPosition(ctx.repo) }; });

@@ -18,6 +18,7 @@ const can = (type, level = store.LEVEL.VIEW) => () => store.can(type, level);
 const DESTINATIONS = [
   ['go.dashboard', 'Dashboard', 'home', 'g d', '/', null],
   ['go.reports', 'Reports', 'bar-chart', 'g r', '/reports', 'account'],
+  ['go.reportbuilder', 'Report Builder', 'bar-chart', null, '/reports/builder', null],
   ['go.chart', 'Chart of Accounts', 'ledger', 'g a', '/chart', 'account'],
   ['go.journal', 'Journal Entries', 'ledger', 'g j', '/list/journal_entry', 'journal_entry'],
   ['go.banking', 'Banking', 'bank', 'g b', '/bank', 'bank_account'],

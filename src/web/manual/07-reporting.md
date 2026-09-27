@@ -57,3 +57,20 @@ sets Power BI up in one click.
 
 A SOAP endpoint with a generated WSDL is at `/soap/v1` for systems that need
 it.
+
+## Report builder
+
+**Reports → New report** opens a pivot builder over any record type your role
+can see, or one of the pre-joined analytic feeds (sales, receivables ageing,
+profit and loss...). Drag a field from the list onto:
+
+- **Rows** — what each row of the table represents. A date field can be
+  bucketed by day, month, quarter or year instead of shown exactly.
+- **Columns** — optional; splits every row across a second dimension.
+- **Values** — what to count, sum, average, or take the min/max of. More
+  than one value can be added.
+
+The table updates as you build it. **Save** it a name to find it again under
+Reports → Custom — private by default, or shared with everyone on the tenant.
+Only the person who saved a report, or someone with full access, can change
+it afterwards. **Export CSV** downloads exactly what is on screen.

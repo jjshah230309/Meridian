@@ -136,6 +136,14 @@ export const API = {
   expiringLots: (params) => get('/api/v1/inventory/lots/expiring', params),
   lotTrace: (id) => get(`/api/v1/inventory/lots/${id}/trace`),
 
+  reportDatasets: () => get('/api/v1/reports/datasets'),
+  runPivot: (definition) => post('/api/v1/reports/pivot', definition),
+  customReports: () => get('/api/v1/reports/custom'),
+  customReport: (id) => get(`/api/v1/reports/custom/${id}`),
+  createCustomReport: (body) => post('/api/v1/reports/custom', body),
+  updateCustomReport: (id, body) => patch(`/api/v1/reports/custom/${id}`, body),
+  deleteCustomReport: (id) => del(`/api/v1/reports/custom/${id}`),
+
   pipeline: (params) => get('/api/v1/crm/pipeline', params),
   forecast: (params) => get('/api/v1/crm/forecast', params),
   convertLead: (id, body) => post(`/api/v1/crm/leads/${id}/convert`, body),

@@ -26,6 +26,14 @@ const CATALOGUE = [
 export async function reportsView(route, { go }) {
   const id = route.parts[1];
   if (!id) return indexView(go);
+  if (id === 'builder') {
+    const { reportBuilderView } = await import('./reportbuilder.js');
+    return reportBuilderView(route.parts[2] || null, { go });
+  }
+  if (id === 'custom') {
+    const { reportBuilderView } = await import('./reportbuilder.js');
+    return reportBuilderView(route.parts[2], { go });
+  }
   const report = CATALOGUE.find((r) => r.id === id);
   if (!report) return h('div.page', empty('Unknown report', `No report called “${id}”.`));
   if (!store.can(report.perm)) return h('div.page', empty('Not permitted', `Your role cannot view ${report.name.toLowerCase()}.`));
@@ -40,12 +48,15 @@ export async function reportsView(route, { go }) {
   return renderers[id]({ go, route });
 }
 
-function indexView(go) {
+async function indexView(go) {
   const groups = {};
   for (const r of CATALOGUE) {
     if (!store.can(r.perm)) continue;
     (groups[r.group] ||= []).push(r);
   }
+  let custom = [];
+  try { custom = (await API.customReports()).reports; } catch { /* no permission to see any dataset at all */ }
+
   return h('div.page',
     h('div.page-head', h('div.titles', h('h1', 'Reports'),
       h('div.page-sub', 'Everything reads live from the ledger — no overnight batch, no stale extract.'))),
@@ -53,7 +64,16 @@ function indexView(go) {
       h('h3', { style: { textTransform: 'uppercase', fontSize: '11.5px', letterSpacing: '.05em', color: 'var(--text-faint)', marginBottom: '8px' } }, group),
       h('div.kpi-grid', ...items.map((r) => h('div.kpi.linked', { onclick: () => go(`/reports/${r.id}`) },
         h('div', { style: { fontWeight: 600, fontSize: '13.5px' } }, r.name),
-        h('div.muted', { style: { fontSize: '12px', marginTop: '4px', lineHeight: 1.45 } }, r.desc)))))));
+        h('div.muted', { style: { fontSize: '12px', marginTop: '4px', lineHeight: 1.45 } }, r.desc)))))),
+    h('div', { style: { marginBottom: '20px' } },
+      h('h3', { style: { textTransform: 'uppercase', fontSize: '11.5px', letterSpacing: '.05em', color: 'var(--text-faint)', marginBottom: '8px' } }, 'Custom'),
+      h('div.kpi-grid',
+        h('div.kpi.linked', { onclick: () => go('/reports/builder') },
+          h('div', { style: { fontWeight: 600, fontSize: '13.5px' } }, icon('plus', { size: 13 }), ' New report'),
+          h('div.muted', { style: { fontSize: '12px', marginTop: '4px' } }, 'Build a pivot over any record type or analytic feed.')),
+        ...custom.map((r) => h('div.kpi.linked', { onclick: () => go(`/reports/custom/${r.id}`) },
+          h('div', { style: { fontWeight: 600, fontSize: '13.5px' } }, r.name),
+          h('div.muted', { style: { fontSize: '12px', marginTop: '4px' } }, r.is_public ? 'Shared' : 'Private'))))));
 }
 
 // ------------------------------------------------------------- controls

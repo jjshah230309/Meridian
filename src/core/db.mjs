@@ -26,7 +26,7 @@ import { ulid, nowIso, safeJson } from './util.mjs';
 export const TENANT_TABLES = new Set([
   'session',
   'app_user', 'role', 'permission', 'role_restriction', 'user_role', 'api_token',
-  'audit_event', 'sequence', 'custom_field', 'saved_search', 'dashboard',
+  'audit_event', 'sequence', 'custom_field', 'saved_search', 'dashboard', 'custom_report',
   'workflow', 'workflow_log', 'server_script', 'notification', 'search_doc',
   'subsidiary', 'currency', 'exchange_rate', 'department', 'segment_class',
   'account', 'accounting_period', 'journal_entry', 'journal_line', 'gl_balance',

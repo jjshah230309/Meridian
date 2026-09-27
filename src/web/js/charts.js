@@ -85,6 +85,41 @@ export function lineChart(data, { height = 168, format = (v) => fmt.moneyCompact
   return svgEl('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img' }, kids);
 }
 
+/**
+ * Grouped (clustered) bars — one group per row, one bar per series (column).
+ * data: [{ label, values: [n, n, ...] }], seriesLabels: [string, ...]
+ */
+export function groupedBar(data, seriesLabels, { height = 220, format = (v) => fmt.moneyCompact(v), gridLines = 4 } = {}) {
+  const W = 640, H = height, padL = 52, padR = 8, padT = 10, padB = 24;
+  const colours = ['var(--accent)', 'var(--pos)', 'var(--warn)', 'var(--chart-brown)', 'var(--chart-purple)', 'var(--chart-blue)'];
+  const max = niceMax(Math.max(1, ...data.flatMap((d) => d.values)));
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const groupStep = data.length ? innerW / data.length : innerW;
+  const n = seriesLabels.length || 1;
+  const barW = Math.max(2, Math.min(24, (groupStep * 0.78) / n));
+
+  const kids = [];
+  for (let i = 0; i <= gridLines; i++) {
+    const y = padT + innerH - (innerH * i) / gridLines;
+    kids.push(svgEl('line', { class: 'grid-line', x1: padL, x2: W - padR, y1: y, y2: y }));
+    kids.push(svgEl('text', { x: padL - 6, y: y + 3, 'text-anchor': 'end' }, format((max * i) / gridLines)));
+  }
+  data.forEach((d, gi) => {
+    const groupX = padL + groupStep * gi + (groupStep - barW * n) / 2;
+    d.values.forEach((v, si) => {
+      const bh = Math.max(0, (v / max) * innerH);
+      const x = groupX + barW * si;
+      const y = padT + innerH - bh;
+      kids.push(svgEl('rect', {
+        x, y, width: Math.max(1, barW - 1), height: bh, rx: 2, fill: colours[si % colours.length],
+      }, svgEl('title', {}, `${d.label} · ${seriesLabels[si] || ''}: ${format(v)}`)));
+    });
+    kids.push(svgEl('text', { x: padL + groupStep * gi + groupStep / 2, y: H - 7, 'text-anchor': 'middle' }, d.label));
+  });
+  kids.push(svgEl('line', { class: 'axis', x1: padL, x2: W - padR, y1: padT + innerH, y2: padT + innerH }));
+  return svgEl('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img' }, kids);
+}
+
 /** Horizontal stacked bar — used for aging buckets and mix breakdowns. */
 export function stackedBar(segments, { height = 22, format = (v) => fmt.money(v) } = {}) {
   const total = segments.reduce((a, s) => a + Math.max(0, s.value), 0) || 1;
