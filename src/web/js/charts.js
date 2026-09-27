@@ -5,7 +5,7 @@ import { h } from './dom.js';
 import * as fmt from './format.js';
 
 const NS = 'http://www.w3.org/2000/svg';
-const svgEl = (tag, attrs = {}, ...kids) => {
+export const svgEl = (tag, attrs = {}, ...kids) => {
   const el = document.createElementNS(NS, tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v === null || v === undefined || v === false) continue;

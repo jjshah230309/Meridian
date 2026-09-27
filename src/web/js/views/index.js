@@ -23,6 +23,7 @@ export const routes = [
   { match: (r) => r.parts[0] === 'hr', render: lazy('./hr.js', 'hrView') },
   { match: (r) => r.parts[0] === 'bank', render: lazy('./bank.js', 'bankView') },
   { match: (r) => r.parts[0] === 'setup', render: lazy('./setup.js', 'setupView') },
+  { match: (r) => r.parts[0] === 'flow', render: lazy('./flowdesigner.js', 'flowDesignerView') },
   { match: (r) => r.parts[0] === 'data', render: lazy('./data.js', 'dataView') },
   { match: (r) => r.parts[0] === 'revenue', render: lazy('./revenue.js', 'revenueView') },
   { match: (r) => r.parts[0] === 'recurring', render: lazy('./recurring.js', 'recurringView') },

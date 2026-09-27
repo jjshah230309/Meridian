@@ -287,12 +287,11 @@ async function fieldsTab() {
 async function workflowsTab() {
   const res = await API.list('workflow', { limit: 200 });
   const rows = res.rows || [];
-  const recordTypes = Object.keys(store.state.meta.records).sort();
 
   const table = rows.length
     ? h('div.grid-wrap', h('table.grid',
       h('thead', h('tr', h('th', 'Name'), h('th', 'Record'), h('th', 'Trigger'), h('th', 'Condition'), h('th', 'Status'), h('th.num', 'Runs'))),
-      h('tbody', ...rows.map((w) => h('tr.clickable', { onclick: () => window.__meridianGo(`/record/workflow/${w.id}`) },
+      h('tbody', ...rows.map((w) => h('tr.clickable', { onclick: () => window.__meridianGo(`/flow/workflow/${w.id}`) },
         h('td', h('strong', w.name)),
         h('td.muted', fmt.titleCase(w.record_type)),
         h('td', h('span.tag', fmt.titleCase(w.trigger))),
@@ -300,78 +299,6 @@ async function workflowsTab() {
         h('td', statusTag(w.status)),
         h('td.num.muted', String(w.run_count)))))))
     : empty('No workflows yet', 'Automate approvals, notifications and field updates without writing code.');
-
-  function newWorkflow() {
-    const actionsHost = h('div');
-    const actionList = [];
-    const drawActions = () => {
-      clear(actionsHost);
-      actionList.forEach((a, i) => {
-        const typeSel = h('select', { onchange: (e) => { a.type = e.target.value; } },
-          ...Object.entries(store.state.meta.action_types).map(([k, v]) => h('option', { value: k, selected: k === a.type }, v.label)));
-        const p1 = h('input', { placeholder: 'Title / field / message', value: a.p1 || '', oninput: (e) => { a.p1 = e.target.value; } });
-        const p2 = h('input', { placeholder: 'Value (prefix with = for an expression)', value: a.p2 || '', oninput: (e) => { a.p2 = e.target.value; } });
-        actionsHost.appendChild(h('div.filter-row', typeSel, p1, p2,
-          h('button.btn.sm.ghost', { onclick: () => { actionList.splice(i, 1); drawActions(); } }, icon('x', { size: 13 }))));
-      });
-      if (!actionList.length) actionsHost.appendChild(h('div.muted', { style: { padding: '6px 0' } }, 'Add at least one action.'));
-    };
-    drawActions();
-
-    const name = h('input', { type: 'text' });
-    const recordSel = h('select', ...recordTypes.map((t) => h('option', { value: t }, store.metaFor(t).label)));
-    const triggerSel = h('select', ...store.state.meta.workflow_triggers.map((t) => h('option', { value: t }, fmt.titleCase(t))));
-    const condition = h('input', { type: 'text', class: 'mono', placeholder: 'e.g. total > 50000 && status == "open"' });
-    const conditionNote = h('div.help', 'Leave blank to run on every save.');
-    const statusSel = h('select', h('option', { value: 'released' }, 'Released'), h('option', { value: 'draft' }, 'Draft'));
-
-    condition.addEventListener('blur', async () => {
-      if (!condition.value.trim()) { conditionNote.textContent = 'Leave blank to run on every save.'; conditionNote.className = 'help'; return; }
-      try {
-        const v = await API.validateExpression(condition.value);
-        conditionNote.textContent = v.ok ? 'Valid expression.' : v.error;
-        conditionNote.className = v.ok ? 'help' : 'err';
-      } catch { /* validation is advisory */ }
-    });
-
-    modal({
-      title: 'New workflow', size: 'wide',
-      body: h('div',
-        h('div.form-grid',
-          h('div.field', h('label', 'Name'), name),
-          h('div.field', h('label', 'Record type'), recordSel),
-          h('div.field', h('label', 'Trigger'), triggerSel),
-          h('div.field', h('label', 'Status'), statusSel),
-          h('div.field.full', h('label', 'Condition'), condition, conditionNote)),
-        h('div.form-section',
-          h('h3', 'Actions'),
-          actionsHost,
-          h('button.btn.sm', { style: { marginTop: '8px' }, onclick: () => { actionList.push({ type: 'notify' }); drawActions(); } }, icon('plus', { size: 13 }), 'Add action'))),
-      actions: [
-        { label: 'Cancel', value: null },
-        {
-          label: 'Create workflow', kind: 'primary',
-          onClick: async () => {
-            const actions = actionList.map((a) => {
-              const base = { type: a.type };
-              if (a.type === 'set_field') return { ...base, field: a.p1, value: a.p2 };
-              if (a.type === 'block') return { ...base, message: a.p1 };
-              if (a.type === 'create_task') return { ...base, subject: a.p1, due_in_days: Number(a.p2) || 3 };
-              if (a.type === 'notify') return { ...base, title: a.p1, body: a.p2 };
-              if (a.type === 'webhook') return { ...base, url: a.p1, event_type: a.p2 };
-              return { ...base, message: a.p1 };
-            });
-            await API.create('workflow', {
-              name: name.value, record_type: recordSel.value, trigger: triggerSel.value,
-              condition: condition.value, status: statusSel.value, actions,
-            });
-            toast('Workflow created', { kind: 'success' });
-            window.location.reload();
-          },
-        },
-      ],
-    });
-  }
 
   const explainer = h('div.card', { style: { marginBottom: '14px' } },
     h('div.card-body',
@@ -384,7 +311,7 @@ async function workflowsTab() {
     explainer,
     h('div.card',
       h('div.card-head', h('h2', 'Workflows'), h('span.muted', { style: { fontSize: '12px' } }, `${rows.length}`),
-        h('div.actions', store.can('workflow', store.LEVEL.CREATE) && h('button.btn.sm.primary', { onclick: newWorkflow }, icon('plus', { size: 14 }), 'New workflow'))),
+        h('div.actions', store.can('workflow', store.LEVEL.CREATE) && h('button.btn.sm.primary', { onclick: () => window.__meridianGo('/flow/workflow/new') }, icon('plus', { size: 14 }), 'New workflow'))),
       table));
 }
 
@@ -414,16 +341,17 @@ async function rulesTab() {
 
   const approvalTable = h('div.card',
     h('div.card-head', h('h2', 'Approval rules'),
-      h('span.muted', { style: { fontSize: '12px' } }, 'The first matching rule routes the document for approval'),
-      h('div.actions', store.can('setup', store.LEVEL.CREATE) && h('button.btn.sm', { onclick: () => window.__meridianGo('/new/approval_rule') }, icon('plus', { size: 13 }), 'New rule'))),
+      h('span.muted', { style: { fontSize: '12px' } }, 'The first matching rule (by sequence) routes the document through its chain of steps'),
+      h('div.actions', store.can('setup', store.LEVEL.CREATE) && h('button.btn.sm', { onclick: () => window.__meridianGo('/flow/approval/new') }, icon('plus', { size: 13 }), 'New rule'))),
     approvals.rows.length
       ? h('div.grid-wrap', h('table.grid',
-        h('thead', h('tr', h('th.num', 'Seq'), h('th', 'Name'), h('th', 'Applies to'), h('th', 'Condition'), h('th', 'Status'))),
-        h('tbody', ...approvals.rows.map((r) => h('tr.clickable', { onclick: () => window.__meridianGo(`/record/approval_rule/${r.id}`) },
+        h('thead', h('tr', h('th.num', 'Seq'), h('th', 'Name'), h('th', 'Applies to'), h('th', 'Condition'), h('th.num', 'Steps'), h('th', 'Status'))),
+        h('tbody', ...approvals.rows.map((r) => h('tr.clickable', { onclick: () => window.__meridianGo(`/flow/approval/${r.id}`) },
           h('td.num.muted', String(r.sequence)),
           h('td', h('strong', r.name)),
           h('td.muted', fmt.titleCase(r.txn_type.replace(/_/g, ' ').toLowerCase())),
           h('td', h('span.mono', { style: { fontSize: '11px' } }, r.condition || 'always')),
+          h('td.num.muted', String(r.steps?.length || 1)),
           h('td', r.active ? h('span.tag.green', 'Active') : h('span.tag', 'Off')))))))
       : empty('No approval rules', 'Without a rule, documents post straight through.'));
 

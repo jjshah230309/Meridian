@@ -46,6 +46,7 @@ export const HANDLERS = {
   schedule_template: { create: schedules.createTemplate, update: schedules.updateTemplate },
   workflow: { create: platform.createWorkflow, update: platform.updateWorkflow },
   saved_search: { create: platform.saveSearch, update: platform.updateSavedSearch },
+  approval_rule: { create: platform.createApprovalRule, update: platform.updateApprovalRule },
 };
 
 /**

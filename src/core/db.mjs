@@ -87,13 +87,14 @@ export const JSON_COLUMNS = new Set([
   'checks', 'contents', 'lines', 'media', 'site_address', 'skills',
   'template', 'ratings', 'goals',
   'mapping', 'defaults', 'errors', 'created_ids', 'columns', 'filters',
-  'documents', 'weights',
+  'documents', 'weights', 'steps', 'else_actions',
 ]);
 
 /** The subset of JSON_COLUMNS holding arrays, so a failed parse yields []. */
 const JSON_ARRAY_COLUMNS = new Set([
   'scopes', 'allowed', 'checks', 'contents', 'lines', 'media', 'skills',
   'template', 'ratings', 'goals', 'errors', 'created_ids', 'columns', 'filters',
+  'steps', 'else_actions',
 ]);
 
 export class DbError extends Error {

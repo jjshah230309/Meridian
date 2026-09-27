@@ -646,27 +646,69 @@ export function buildApi({ config }) {
     });
   });
 
+  /** What the approval progress strip shows: which step, waiting on whom, and whether this caller can act on it. */
+  function approvalInfo(ctx, t) {
+    if (t.approval_status !== 'pending') return null;
+    const steps = T.stepsFor(ctx.repo, t);
+    const current = T.currentApprovalStep(ctx.repo, t);
+    const named = (s) => (s.approver_user_id ? ctx.repo.get('app_user', s.approver_user_id)?.name
+      : s.approver_role_id ? ctx.repo.get('role', s.approver_role_id)?.name : null);
+    const matches = current ? T.approverMatchesStep(current.step, {
+      userId: ctx.user?.id || null, roleIds: (ctx.access?.roles || []).map((r) => r.id), isOwner: !!ctx.access?.isOwner,
+    }) : null;
+    return {
+      step_index: current?.index ?? steps.length, total_steps: steps.length,
+      waiting_on: current ? (named(current.step) || 'Anyone with full access') : null,
+      is_final: current?.isFinal ?? true,
+      can_act: current ? (matches !== false) : true,
+    };
+  }
+
   r.get(`${P}/txn/:id`, async (ctx) => {
     const t = T.getTxn(ctx.repo, ctx.params.id);
     if (!t) throw notFound('Transaction not found');
     requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.VIEW);
     if (!rbac.canSeeRow(ctx.access, 'txn', t)) throw forbidden('You do not have access to that transaction.');
-    return { ...t, journal: t.journal_entry_id ? gl.getJournalEntry(ctx.repo, t.journal_entry_id) : null, transforms: T.TRANSFORMS[t.type] || [] };
+    return { ...t, journal: t.journal_entry_id ? gl.getJournalEntry(ctx.repo, t.journal_entry_id) : null, transforms: T.TRANSFORMS[t.type] || [], approval: approvalInfo(ctx, t) };
   });
+
+  /**
+   * A multi-step chain's approver is not necessarily someone with FULL on
+   * the document type, so the route can no longer gate on that alone. The
+   * current step decides who may act: its named role or user if it names
+   * one, otherwise the pre-chain rule (FULL access) applies unchanged.
+   * txn.mjs makes no permission decision of its own -- same split every
+   * other check in this file keeps.
+   */
+  function requireApprovalStep(ctx, t) {
+    requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.VIEW);
+    if (!rbac.canSeeRow(ctx.access, 'txn', t)) throw forbidden('You do not have access to that transaction.');
+    const current = T.currentApprovalStep(ctx.repo, t);
+    if (!current) return; // nothing left applies; treat as clear
+    const matches = T.approverMatchesStep(current.step, {
+      userId: ctx.user?.id || null,
+      roleIds: (ctx.access?.roles || []).map((r) => r.id),
+      isOwner: !!ctx.access?.isOwner,
+    });
+    if (matches === false) {
+      throw forbidden(current.step.approver_user_id ? 'Only the named approver can act on this step.' : 'Only someone in the named role can act on this step.');
+    }
+    if (matches === null) requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.FULL);
+  }
 
   r.post(`${P}/txn/:id/approve`, async (ctx) => {
     const t = T.requireTxn(ctx.repo, ctx.params.id);
-    requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.FULL);
+    requireApprovalStep(ctx, t);
     return ctx.tx(() => {
       const approved = T.approveTxn(ctx.repo, ctx.params.id, ctx.body || {});
-      withWorkflows(ctx.repo, T.PERM_FOR[t.type], 'on_approve', approved, t, null);
+      if (approved.approval_status === 'approved') withWorkflows(ctx.repo, T.PERM_FOR[t.type], 'on_approve', approved, t, null);
       return approved;
     });
   });
 
   r.post(`${P}/txn/:id/reject`, async (ctx) => {
     const t = T.requireTxn(ctx.repo, ctx.params.id);
-    requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.FULL);
+    requireApprovalStep(ctx, t);
     return ctx.tx(() => T.rejectTxn(ctx.repo, ctx.params.id, ctx.body || {}));
   });
 
@@ -679,7 +721,14 @@ export function buildApi({ config }) {
   r.post(`${P}/txn/:id/post`, async (ctx) => {
     const t = T.requireTxn(ctx.repo, ctx.params.id);
     requirePerm(ctx, T.PERM_FOR[t.type], LEVEL.FULL);
-    return ctx.tx(() => T.postTxn(ctx.repo, ctx.params.id));
+    return ctx.tx(() => {
+      const posted = T.postTxn(ctx.repo, ctx.params.id);
+      // on_post used to fire only for POST /gl/journal -- a document posted
+      // through its own route (this one) never ran an on_post workflow at
+      // all, however it got here.
+      withWorkflows(ctx.repo, T.PERM_FOR[t.type], 'on_post', posted, t, null);
+      return posted;
+    });
   });
 
   r.get(`${P}/txn/:id/transform/:target`, async (ctx) => {

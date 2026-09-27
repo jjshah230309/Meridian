@@ -43,7 +43,11 @@ export async function txnView(route, { go }) {
 
   const actions = [];
   const canFull = store.can(permType, store.LEVEL.FULL);
-  if (t.approval_status === 'pending' && canFull) {
+  // A step naming a specific role or person can be cleared by them even
+  // without FULL access to the document type -- the server is what actually
+  // enforces this (a 403 if they are wrong), t.approval.can_act just decides
+  // whether the buttons are worth showing at all.
+  if (t.approval_status === 'pending' && (t.approval ? t.approval.can_act : canFull)) {
     actions.push(h('button.btn.primary', { onclick: () => act('approve') }, '✓ Approve'));
     actions.push(h('button.btn.danger', { onclick: () => act('reject') }, 'Reject'));
   }
@@ -94,6 +98,13 @@ export async function txnView(route, { go }) {
           t.posted ? h('span.tag.green', 'Posted') : h('span.tag', 'Not posted')),
         h('div.page-sub', `${entityName} · ${fmt.date(t.txn_date)}${t.reference ? ' · ref ' + t.reference : ''}`)),
       h('div.page-actions', ...actions)),
+
+    t.approval ? h('div.card', { style: { marginBottom: '14px' } },
+      h('div.card-body', h('div.row', { style: { gap: '10px', alignItems: 'center', fontSize: '12.5px' } },
+        h('span.tag.amber', `Step ${Math.min(t.approval.step_index + 1, t.approval.total_steps)} of ${t.approval.total_steps}`),
+        h('span.muted', `Waiting on: ${t.approval.waiting_on || 'anyone with full access'}`),
+        t.approval.is_final ? h('span.faint', '(final step)') : null,
+        !t.approval.can_act ? h('span.faint', '— you are not this step\'s approver') : null))) : null,
 
     h('div.split',
       h('div.stack',

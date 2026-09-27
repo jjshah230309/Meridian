@@ -12,7 +12,7 @@
 // Nothing here writes to the GL directly; everything goes through
 // gl.postJournal so the ledger keeps its invariants.
 import { ulid, nowIso, today, Money, Qty, termsToDueDate, isValidDate, round, sum, addDays } from '../core/util.mjs';
-import { notFound, unprocessable, conflict, ValidationError, badRequest, forbidden } from '../core/http.mjs';
+import { notFound, unprocessable, conflict, ValidationError, badRequest } from '../core/http.mjs';
 import { nextNumber } from '../core/seq.mjs';
 import { compile, test as exprTest } from '../core/expr.mjs';
 import * as audit from '../core/audit.mjs';
@@ -347,9 +347,10 @@ export function createTxn(repo, type, input, { autoPost = true, skipApproval = f
   // ---- approval routing
   let approvalStatus = 'not_required';
   let status = input.status || 'open';
+  let matchedRule = null;
   if (!skipApproval) {
-    const rule = approvalRoute(repo, type, { ...header, ...totals }, lines);
-    if (rule) { approvalStatus = 'pending'; status = 'pending_approval'; }
+    matchedRule = approvalRoute(repo, type, { ...header, ...totals }, lines);
+    if (matchedRule) { approvalStatus = 'pending'; status = 'pending_approval'; }
   }
   if (type === 'QUOTE' && !input.status) status = 'open';
   // Stock documents have no lifecycle of their own: once posted they are done.
@@ -372,7 +373,7 @@ export function createTxn(repo, type, input, { autoPost = true, skipApproval = f
       to_location_id: input.to_location_id || null,
       department_id: input.department_id || null, class_id: input.class_id || null,
       currency, fx_rate: fxRate, memo: input.memo || '', reference: input.reference || '',
-      status, approval_status: approvalStatus,
+      status, approval_status: approvalStatus, approval_rule_id: matchedRule?.id || null, approval_step: 0,
       subtotal: totals.subtotal, discount_total: totals.discount_total, tax_total: totals.tax_total,
       shipping_total: totals.shipping_total, total: totals.total,
       base_total: Money.convert(totals.total, fxRate),
@@ -533,9 +534,64 @@ export function reindexTxn(repo, id) {
 }
 
 // ------------------------------------------------------------ approvals
+/**
+ * The step chain a pending document is actually working through. A rule
+ * with no steps at all (never migrated, or saved with none) falls back to
+ * one implicit step naming nobody, which is exactly the pre-chain
+ * behaviour: only someone with FULL access may approve it.
+ */
+export function stepsFor(repo, t) {
+  if (!t.approval_rule_id) return [];
+  const rule = repo.get('approval_rule', t.approval_rule_id);
+  const steps = rule?.steps || [];
+  return steps.length ? steps : [{ approver_role_id: null, approver_user_id: null, condition: '' }];
+}
+
+/** Skip steps whose own condition does not apply to this document. */
+export function nextApplicableStep(repo, t, steps, fromIndex) {
+  const scope = { txn: { ...t, total: Money.toNumber(t.total || 0) }, total: Money.toNumber(t.total || 0) };
+  for (let i = fromIndex; i < steps.length; i++) {
+    const cond = steps[i].condition;
+    if (!cond) return i;
+    try { if (exprTest(cond, scope)) return i; } catch { return i; } // a broken condition still requires approval, safer than silently skipping it
+  }
+  return steps.length; // nothing left applies -- treat as fully approved
+}
+
+/**
+ * Where a pending document currently stands: `null` once nothing further
+ * applies (the caller should treat that as clear to give final approval),
+ * otherwise the step object plus its index. This is deliberately read-only
+ * and makes no permission decision -- who may act on it is for the caller
+ * (the API route, see api.mjs's requireApprovalStep) to decide, the same
+ * separation every other permission check in this codebase keeps.
+ */
+export function currentApprovalStep(repo, t) {
+  const steps = stepsFor(repo, t);
+  const index = nextApplicableStep(repo, t, steps, t.approval_step || 0);
+  return index < steps.length ? { index, step: steps[index], isFinal: nextApplicableStep(repo, t, steps, index + 1) >= steps.length } : null;
+}
+
+/** Does an approver (by user id and role membership) satisfy a step's named approver, if it names one? */
+export function approverMatchesStep(step, { userId, roleIds = [], isOwner = false }) {
+  if (!step.approver_role_id && !step.approver_user_id) return null; // names nobody -- the caller's own permission level decides
+  if (step.approver_user_id && step.approver_user_id === userId) return true;
+  if (step.approver_role_id && roleIds.includes(step.approver_role_id)) return true;
+  return isOwner; // the owner can stand in for any named approver
+}
+
 export function approveTxn(repo, id, { note = '' } = {}) {
   const t = requireTxn(repo, id);
   if (t.approval_status !== 'pending') throw unprocessable(`${t.txn_no} is not awaiting approval.`);
+  const current = currentApprovalStep(repo, t);
+
+  if (current && !current.isFinal) {
+    const nextIndex = nextApplicableStep(repo, t, stepsFor(repo, t), current.index + 1);
+    repo.update('txn', id, { approval_step: nextIndex, updated_at: nowIso() });
+    audit.record(repo, { recordType: PERM_FOR[t.type], recordId: id, action: 'approve_step', changes: { approval_step: { from: current.index, to: nextIndex }, ...(note ? { note: { from: null, to: note } } : {}) } });
+    return getTxn(repo, id);
+  }
+
   repo.update('txn', id, {
     approval_status: 'approved', approved_by: repo.ctx?.user?.id || null, approved_at: nowIso(),
     status: 'open', updated_at: nowIso(),
@@ -551,8 +607,12 @@ export function approveTxn(repo, id, { note = '' } = {}) {
 export function rejectTxn(repo, id, { reason = '' } = {}) {
   const t = requireTxn(repo, id);
   if (t.approval_status !== 'pending') throw unprocessable(`${t.txn_no} is not awaiting approval.`);
-  repo.update('txn', id, { approval_status: 'rejected', status: 'rejected', updated_at: nowIso() });
-  audit.record(repo, { recordType: PERM_FOR[t.type], recordId: id, action: 'reject', changes: { reason: { from: null, to: reason } } });
+  const current = currentApprovalStep(repo, t);
+  repo.update('txn', id, {
+    approval_status: 'rejected', status: 'rejected',
+    rejected_by: repo.ctx?.user?.id || null, rejected_at: nowIso(), updated_at: nowIso(),
+  });
+  audit.record(repo, { recordType: PERM_FOR[t.type], recordId: id, action: 'reject', changes: { approval_step: { from: null, to: current?.index ?? null }, reason: { from: null, to: reason } } });
   return getTxn(repo, id);
 }
 

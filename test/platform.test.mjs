@@ -241,6 +241,132 @@ test('a draft workflow does not run', () => {
   assert.equal(platform.dispatch(f.repo, 'customer', 'before_create', {}, { mutable: {} }).blocked, null);
 });
 
+test('a workflow runs its else branch when the condition does not match', () => {
+  const f = freshTenant();
+  f.tx(() => platform.createWorkflow(f.repo, {
+    name: 'Flag small deals', record_type: 'invoice', trigger: 'before_create',
+    condition: 'total > 10000', status: 'released',
+    actions: [{ type: 'set_field', field: 'memo', value: 'big' }],
+    else_actions: [{ type: 'set_field', field: 'memo', value: 'small' }],
+  }));
+  const mutable = { total: Money.parse(50), memo: '' };
+  const outcome = platform.dispatch(f.repo, 'invoice', 'before_create', mutable, { mutable });
+  assert.equal(outcome.blocked, null);
+  assert.equal(mutable.memo, 'small', 'the else branch must run when the condition is false');
+});
+
+test('updating a workflow re-checks its actions against its (possibly new) trigger', () => {
+  const f = freshTenant();
+  const wf = f.tx(() => platform.createWorkflow(f.repo, {
+    name: 'Set a field', record_type: 'customer', trigger: 'before_create', status: 'released',
+    actions: [{ type: 'set_field', field: 'category', value: 'x' }],
+  }));
+  // set_field only makes sense on a before_* trigger; changing the trigger
+  // to after_create without also fixing the action used to be accepted
+  // silently.
+  assert.throws(() => f.tx(() => platform.updateWorkflow(f.repo, wf.id, { trigger: 'after_create' })), /before_create or before_update/);
+  assert.throws(() => f.tx(() => platform.updateWorkflow(f.repo, wf.id, { actions: [{ type: 'not_a_real_action' }] })), /Unknown action/);
+});
+
+// -------------------------------------------------------- approval chains
+test('a multi-step approval chain requires each step in order before the document is approved', () => {
+  const f = freshTenant();
+  const customer = f.tx(() => entities.createCustomer(f.repo, { name: 'Big Co' }));
+  const item = f.tx(() => inv.createItem(f.repo, { sku: 'S1', name: 'Service', type: 'service', base_price: 1000 }));
+  const managerId = f.tx(() => f.repo.insert('app_user', {
+    email: 'manager@test.local', name: 'Manager', status: 'active', is_owner: 0,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }));
+  f.tx(() => platform.createApprovalRule(f.repo, {
+    name: 'Two-step', txn_type: 'SALES_ORDER', condition: 'total > 5000',
+    steps: [{ approver_user_id: managerId }, { approver_role_id: f.roleIds['Sales Manager'] }],
+  }));
+
+  const big = f.tx(() => T.createTxn(f.repo, 'SALES_ORDER', {
+    entity_id: customer.id, txn_date: DATE, lines: [{ item_id: item.id, quantity: 10 }],
+  }));
+  assert.equal(big.approval_status, 'pending');
+  const step0 = T.currentApprovalStep(f.repo, big);
+  assert.equal(step0.index, 0);
+  assert.equal(step0.isFinal, false);
+  assert.equal(T.approverMatchesStep(step0.step, { userId: 'someone-else', roleIds: [] }), false);
+  assert.equal(T.approverMatchesStep(step0.step, { userId: managerId, roleIds: [] }), true);
+
+  const afterStep1 = f.tx(() => T.approveTxn(f.repo, big.id));
+  assert.equal(afterStep1.approval_status, 'pending', 'one step down, one to go');
+  assert.equal(afterStep1.approval_step, 1);
+
+  const step1 = T.currentApprovalStep(f.repo, afterStep1);
+  assert.equal(step1.isFinal, true);
+  const final = f.tx(() => T.approveTxn(f.repo, big.id));
+  assert.equal(final.approval_status, 'approved');
+  assert.equal(final.status, 'open');
+});
+
+test('a step whose own condition does not apply is skipped without needing anyone to approve it', () => {
+  const f = freshTenant();
+  const customer = f.tx(() => entities.createCustomer(f.repo, { name: 'Big Co' }));
+  const item = f.tx(() => inv.createItem(f.repo, { sku: 'S1', name: 'Service', type: 'service', base_price: 1000 }));
+  const cfoId = f.tx(() => f.repo.insert('app_user', {
+    email: 'cfo@test.local', name: 'CFO', status: 'active', is_owner: 0,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }));
+  f.tx(() => platform.createApprovalRule(f.repo, {
+    name: 'Manager, then CFO if huge', txn_type: 'SALES_ORDER', condition: 'total > 5000',
+    steps: [{ approver_role_id: f.roleIds['Sales Manager'] }, { approver_user_id: cfoId, condition: 'total > 50000' }],
+  }));
+  const order = f.tx(() => T.createTxn(f.repo, 'SALES_ORDER', {
+    entity_id: customer.id, txn_date: DATE, lines: [{ item_id: item.id, quantity: 10 }], // total 10000, under the CFO's threshold
+  }));
+  const step0 = T.currentApprovalStep(f.repo, order);
+  assert.equal(step0.isFinal, true, 'the CFO step does not apply at this amount, so the manager step is the last one');
+  const approved = f.tx(() => T.approveTxn(f.repo, order.id));
+  assert.equal(approved.approval_status, 'approved');
+});
+
+test('rejecting an approval records who rejected it and why, and it stays rejected', () => {
+  const f = freshTenant();
+  const customer = f.tx(() => entities.createCustomer(f.repo, { name: 'Big Co' }));
+  const item = f.tx(() => inv.createItem(f.repo, { sku: 'S1', name: 'Service', type: 'service', base_price: 1000 }));
+  f.tx(() => platform.createApprovalRule(f.repo, { name: 'Over 5k', txn_type: 'SALES_ORDER', condition: 'total > 5000', steps: [{}] }));
+  const order = f.tx(() => T.createTxn(f.repo, 'SALES_ORDER', {
+    entity_id: customer.id, txn_date: DATE, lines: [{ item_id: item.id, quantity: 10 }],
+  }));
+  const rejected = f.tx(() => T.rejectTxn(f.repo, order.id, { reason: 'Too much discount' }));
+  assert.equal(rejected.approval_status, 'rejected');
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(rejected.rejected_by, f.ownerId);
+  assert.ok(rejected.rejected_at);
+});
+
+test('a single-step rule saved before chains existed keeps working exactly as before', () => {
+  // Mirrors the pre-chain test above but through a raw insert with no
+  // `steps` at all -- the migration backfills existing rows, but a rule
+  // this old still has to route and approve/reject correctly.
+  const f = freshTenant();
+  const customer = f.tx(() => entities.createCustomer(f.repo, { name: 'Big Co' }));
+  const item = f.tx(() => inv.createItem(f.repo, { sku: 'S1', name: 'Service', type: 'service', base_price: 1000 }));
+  f.tx(() => f.repo.insert('approval_rule', {
+    name: 'Over 5k (legacy)', txn_type: 'SALES_ORDER', condition: 'total > 5000',
+    sequence: 1, active: 1, created_at: new Date().toISOString(),
+  }));
+  const order = f.tx(() => T.createTxn(f.repo, 'SALES_ORDER', {
+    entity_id: customer.id, txn_date: DATE, lines: [{ item_id: item.id, quantity: 10 }],
+  }));
+  const step = T.currentApprovalStep(f.repo, order);
+  assert.equal(step.isFinal, true, 'one implicit step, naming nobody');
+  assert.equal(T.approverMatchesStep(step.step, { userId: f.ownerId, roleIds: [] }), null, 'names nobody -- the caller\'s own permission level decides');
+  const approved = f.tx(() => T.approveTxn(f.repo, order.id));
+  assert.equal(approved.approval_status, 'approved');
+});
+
+test('creating an approval rule validates its steps', () => {
+  const f = freshTenant();
+  assert.throws(() => f.tx(() => platform.createApprovalRule(f.repo, { name: 'x', txn_type: 'SALES_ORDER', steps: [] })), /Add at least one/);
+  assert.throws(() => f.tx(() => platform.createApprovalRule(f.repo, { name: 'x', txn_type: 'SALES_ORDER', steps: [{ approver_role_id: 'not-a-real-role' }] })), /Unknown role/);
+  assert.throws(() => f.tx(() => platform.createApprovalRule(f.repo, { name: 'x', txn_type: 'SALES_ORDER', steps: [{ condition: 'not valid expr (((' }] })), ()=>true);
+});
+
 test('server scripts are disabled unless explicitly enabled', async () => {
   const f = freshTenant();
   assert.equal(platform.scriptsEnabled(), false);

@@ -404,6 +404,18 @@ export const ACTION_TYPES = {
   log: { label: 'Write to the workflow log', params: ['message'] },
 };
 
+/** Check a list of actions against a trigger; returns a {field: message} map. */
+function validateActions(actions, trigger, prefix = 'actions') {
+  const fields = {};
+  actions.forEach((a, i) => {
+    if (!ACTION_TYPES[a.type]) fields[`${prefix}.${i}`] = `Unknown action "${a.type}"`;
+    else if (ACTION_TYPES[a.type].phase === 'before' && !String(trigger).startsWith('before')) {
+      fields[`${prefix}.${i}`] = `"${ACTION_TYPES[a.type].label}" only works on a before_create or before_update trigger`;
+    }
+  });
+  return fields;
+}
+
 export function createWorkflow(repo, input) {
   const fields = {};
   if (!input.name) fields.name = 'Name is required';
@@ -414,20 +426,16 @@ export function createWorkflow(repo, input) {
     if (!v.ok) fields.condition = v.error;
   }
   const actions = Array.isArray(input.actions) ? input.actions : [];
-  if (!actions.length) fields.actions = 'Add at least one action';
-  actions.forEach((a, i) => {
-    if (!ACTION_TYPES[a.type]) fields[`actions.${i}`] = `Unknown action "${a.type}"`;
-    else if (ACTION_TYPES[a.type].phase === 'before' && !String(input.trigger).startsWith('before')) {
-      fields[`actions.${i}`] = `"${ACTION_TYPES[a.type].label}" only works on a before_create or before_update trigger`;
-    }
-  });
+  const elseActions = Array.isArray(input.else_actions) ? input.else_actions : [];
+  if (!actions.length && !elseActions.length) fields.actions = 'Add at least one action';
+  Object.assign(fields, validateActions(actions, input.trigger), validateActions(elseActions, input.trigger, 'else_actions'));
   if (Object.keys(fields).length) throw new ValidationError(fields);
 
   const now = nowIso();
   const id = repo.insert('workflow', {
     id: ulid(), name: input.name, description: input.description || '',
     record_type: input.record_type, trigger: input.trigger, condition: input.condition || '',
-    actions, status: input.status || 'draft', priority: Number(input.priority || 100),
+    actions, else_actions: elseActions, status: input.status || 'draft', priority: Number(input.priority || 100),
     run_count: 0, created_at: now, updated_at: now,
   });
   audit.record(repo, { recordType: 'workflow', recordId: id, action: 'create', after: input });
@@ -441,7 +449,19 @@ export function updateWorkflow(repo, id, patch) {
     const v = validateExpr(patch.condition);
     if (!v.ok) throw new ValidationError({ condition: v.error });
   }
-  const allowed = ['name', 'description', 'record_type', 'trigger', 'condition', 'actions', 'status', 'priority'];
+  const trigger = patch.trigger || before.trigger;
+  // A workflow's actions could change on update but never got checked again
+  // -- an action valid for its old trigger could sit there silently invalid
+  // (or, worse, silently no-op) once the trigger itself changed.
+  const fields = {};
+  if (patch.actions !== undefined) Object.assign(fields, validateActions(Array.isArray(patch.actions) ? patch.actions : [], trigger));
+  if (patch.else_actions !== undefined) Object.assign(fields, validateActions(Array.isArray(patch.else_actions) ? patch.else_actions : [], trigger, 'else_actions'));
+  if (patch.trigger && !patch.actions && !patch.else_actions) {
+    Object.assign(fields, validateActions(before.actions || [], trigger), validateActions(before.else_actions || [], trigger, 'else_actions'));
+  }
+  if (Object.keys(fields).length) throw new ValidationError(fields);
+
+  const allowed = ['name', 'description', 'record_type', 'trigger', 'condition', 'actions', 'else_actions', 'status', 'priority'];
   const clean = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)));
   clean.updated_at = nowIso();
   repo.update('workflow', id, clean);
@@ -469,17 +489,19 @@ export function dispatch(repo, recordType, trigger, record, { before = null, mut
   for (const wf of workflows) {
     const started = Date.now();
     try {
-      if (wf.condition && !exprTest(wf.condition, scope)) {
-        logWorkflow(repo, wf, record, 'skipped', 'Condition not met', Date.now() - started);
+      const matched = !wf.condition || exprTest(wf.condition, scope);
+      const toRun = matched ? (wf.actions || []) : (wf.else_actions || []);
+      if (!toRun.length) {
+        logWorkflow(repo, wf, record, 'skipped', matched ? 'No actions to run' : 'Condition not met', Date.now() - started);
         continue;
       }
-      for (const action of (wf.actions || [])) {
+      for (const action of toRun) {
         const outcome = runAction(repo, wf, action, scope, { record, mutable, recordType });
         if (outcome?.blocked) { blocked = outcome.blocked; break; }
         if (outcome?.field) { changes[outcome.field] = outcome.value; scope[outcome.field] = outcome.value; }
       }
       repo.exec('UPDATE workflow SET run_count = run_count + 1 WHERE tenant_id = :t AND id = ?', [wf.id]);
-      logWorkflow(repo, wf, record, 'matched', blocked ? `Blocked: ${blocked}` : 'Actions executed', Date.now() - started);
+      logWorkflow(repo, wf, record, 'matched', blocked ? `Blocked: ${blocked}` : `${matched ? '' : 'Else branch: '}Actions executed`, Date.now() - started);
       ran++;
       if (blocked) break;
     } catch (e) {
@@ -585,8 +607,74 @@ export function testWorkflow(repo, id, recordId) {
   return {
     workflow: wf.name, record_id: recordId, matched, error,
     scope_preview: Object.fromEntries(Object.entries(scope).filter(([, v]) => typeof v !== 'object').slice(0, 40)),
-    would_run: matched ? (wf.actions || []).map((a) => ({ type: a.type, label: ACTION_TYPES[a.type]?.label || a.type })) : [],
+    would_run: (matched ? (wf.actions || []) : (wf.else_actions || [])).map((a) => ({ type: a.type, label: ACTION_TYPES[a.type]?.label || a.type })),
   };
+}
+
+// =====================================================================
+// APPROVAL RULES
+// =====================================================================
+
+/** A step names a role, a user, neither (falls back to FULL access), or both -- never something else. */
+function validateSteps(repo, steps) {
+  const fields = {};
+  if (!steps.length) fields.steps = 'Add at least one approval step';
+  steps.forEach((s, i) => {
+    if (s.approver_role_id && !repo.get('role', s.approver_role_id)) fields[`steps.${i}.approver_role_id`] = 'Unknown role';
+    if (s.approver_user_id && !repo.get('app_user', s.approver_user_id)) fields[`steps.${i}.approver_user_id`] = 'Unknown user';
+    if (s.condition) {
+      const v = validateExpr(s.condition);
+      if (!v.ok) fields[`steps.${i}.condition`] = v.error;
+    }
+  });
+  return fields;
+}
+
+export function createApprovalRule(repo, input) {
+  const fields = {};
+  if (!input.name) fields.name = 'Name is required';
+  if (!input.txn_type) fields.txn_type = 'Choose a document type';
+  if (input.condition) {
+    const v = validateExpr(input.condition);
+    if (!v.ok) fields.condition = v.error;
+  }
+  const steps = (Array.isArray(input.steps) ? input.steps : [])
+    .map((s) => ({ approver_role_id: s.approver_role_id || null, approver_user_id: s.approver_user_id || null, condition: s.condition || '' }));
+  Object.assign(fields, validateSteps(repo, steps));
+  if (Object.keys(fields).length) throw new ValidationError(fields);
+
+  const first = steps[0] || { approver_role_id: null, approver_user_id: null };
+  const id = repo.insert('approval_rule', {
+    id: ulid(), name: input.name, txn_type: input.txn_type, condition: input.condition || '',
+    steps, approver_role_id: first.approver_role_id, approver_user_id: first.approver_user_id,
+    sequence: Number(input.sequence || 1), active: input.active === false ? 0 : 1, created_at: nowIso(),
+  });
+  audit.record(repo, { recordType: 'approval_rule', recordId: id, action: 'create', after: input });
+  return repo.get('approval_rule', id);
+}
+
+export function updateApprovalRule(repo, id, patch) {
+  const before = repo.get('approval_rule', id);
+  if (!before) throw notFound('Approval rule not found');
+  if (patch.condition) {
+    const v = validateExpr(patch.condition);
+    if (!v.ok) throw new ValidationError({ condition: v.error });
+  }
+  let steps = before.steps;
+  if (patch.steps !== undefined) {
+    steps = (Array.isArray(patch.steps) ? patch.steps : [])
+      .map((s) => ({ approver_role_id: s.approver_role_id || null, approver_user_id: s.approver_user_id || null, condition: s.condition || '' }));
+    const fields = validateSteps(repo, steps);
+    if (Object.keys(fields).length) throw new ValidationError(fields);
+  }
+  const allowed = ['name', 'txn_type', 'condition', 'sequence', 'active'];
+  const clean = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)));
+  clean.steps = steps;
+  const first = steps[0] || { approver_role_id: null, approver_user_id: null };
+  clean.approver_role_id = first.approver_role_id; clean.approver_user_id = first.approver_user_id;
+  repo.update('approval_rule', id, clean);
+  audit.record(repo, { recordType: 'approval_rule', recordId: id, action: 'update', before, after: repo.get('approval_rule', id) });
+  return repo.get('approval_rule', id);
 }
 
 // =====================================================================

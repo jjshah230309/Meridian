@@ -62,16 +62,27 @@ it cannot reach anything else, loop forever or allocate without limit.
 
 A workflow watches a record type for a trigger — created, edited, a field
 changing, a state being reached — checks a condition, and takes actions: set a
-field, send a notification, block the save with a message.
+field, send a notification, block the save with a message. A condition that
+does **not** match can run its own separate list of actions instead of doing
+nothing.
 
 Everything a workflow does is logged against the record it did it to.
+
+Both workflows and approval rules (below) are built in the **flow designer**
+— a vertical diagram of the trigger, its condition, and what happens on each
+branch — reached from a "New workflow" or "New rule" button, or by clicking
+an existing one.
 
 ## Approval rules
 
 An approval rule holds a document at *pending approval* when it matches a
-condition — an order over a value, a bill from a particular supplier — and
-names who can release it. A held document cannot post until it is approved,
-and the approval is recorded with the approver and the time.
+condition — an order over a value, a bill from a particular supplier — until
+it clears every step in its chain, in order. A step can name a specific
+person, a role (anyone holding it may clear that step), or nobody (anyone
+with full access to the document type may). A step can also carry its own
+condition — "over $50,000 also needs the CFO" — and is skipped when that does
+not apply. A held document cannot post until its last step is cleared, and
+each approval is recorded with the approver and the time.
 
 ## Server scripts
 

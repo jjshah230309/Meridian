@@ -505,3 +505,72 @@ test('BOM explode honors a fractional quantity instead of truncating it', async 
   assert.equal(r.body.components.length, 1);
   assert.equal(r.body.components[0].quantity_display, 1, '0.5 assemblies x 2 components each = 1 component');
 });
+
+test('an approval step naming a specific approver overrides FULL access on the document type', async () => {
+  const c = client();
+  await c.login();
+
+  const roles = (await c.call('GET', '/api/v1/setup/roles')).body.roles;
+  const salesManager = roles.find((r) => r.name === 'Sales Manager'); // FULL on sales_order
+  const approver = (await c.call('POST', '/api/v1/setup/users', {
+    name: 'Approver', email: 'approver@test.local', password: PASSWORD, role_ids: [salesManager.id],
+  })).body;
+  const bystander = (await c.call('POST', '/api/v1/setup/users', {
+    name: 'Bystander', email: 'bystander@test.local', password: PASSWORD, role_ids: [salesManager.id],
+  })).body;
+
+  await c.call('POST', '/api/v1/records/approval_rule', {
+    name: 'Named approver only', txn_type: 'SALES_ORDER', condition: 'total > 5000',
+    steps: [{ approver_user_id: approver.id }],
+  });
+
+  const customer = (await c.call('POST', '/api/v1/records/customer', { name: 'Approval Test Co', terms: 'NET30' })).body;
+  const item = (await c.call('POST', '/api/v1/records/item', {
+    sku: 'API-APPR', name: 'Pricey Thing', type: 'service', base_price: 1000,
+  })).body;
+  const so = (await c.call('POST', '/api/v1/records/sales_order', {
+    entity_id: customer.id, txn_date: '2026-06-01', lines: [{ item_id: item.id, quantity: 10 }],
+  })).body;
+  assert.equal(so.approval_status, 'pending');
+
+  const bystanderClient = client();
+  await bystanderClient.login('bystander@test.local', PASSWORD);
+  const denied = await bystanderClient.call('POST', `/api/v1/txn/${so.id}/approve`, {});
+  assert.equal(denied.status, 403, 'Sales Manager\'s FULL access must not be enough once a step names someone else');
+
+  const approverClient = client();
+  await approverClient.login('approver@test.local', PASSWORD);
+  const approved = await approverClient.call('POST', `/api/v1/txn/${so.id}/approve`, {});
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.approval_status, 'approved');
+});
+
+test('POST /txn/:id/post fires an on_post workflow, which used to run nowhere except POST /gl/journal', async () => {
+  const c = client();
+  await c.login();
+
+  await c.call('POST', '/api/v1/records/workflow', {
+    name: 'Log every post', record_type: 'invoice', trigger: 'on_post', status: 'released',
+    actions: [{ type: 'log', message: 'posted via the txn post route' }],
+  });
+
+  const customer = (await c.call('POST', '/api/v1/records/customer', { name: 'On-Post Test Co', terms: 'NET30' })).body;
+  const item = (await c.call('POST', '/api/v1/records/item', {
+    sku: 'API-ONPOST', name: 'Consulting', type: 'service', base_price: 100,
+  })).body;
+  // Every posting document type auto-posts on creation through this route
+  // today, so an already-posted invoice is put back to unposted here purely
+  // to have something to call /post on -- what's under test is whether that
+  // route fires on_post at all, which nothing above needed it to do.
+  const invoice = (await c.call('POST', '/api/v1/records/invoice', {
+    entity_id: customer.id, txn_date: '2026-06-01', lines: [{ item_id: item.id, quantity: 1 }],
+  })).body;
+  assert.equal(invoice.posted, 1);
+  db.prepare('UPDATE txn SET posted = 0, journal_entry_id = NULL WHERE id = ?').run(invoice.id);
+
+  const before = db.prepare("SELECT COUNT(*) c FROM workflow_log WHERE record_id = ? AND result = 'matched'").get(invoice.id).c;
+  const res = await c.call('POST', `/api/v1/txn/${invoice.id}/post`, {});
+  assert.equal(res.status, 200);
+  const after = db.prepare("SELECT COUNT(*) c FROM workflow_log WHERE record_id = ? AND result = 'matched'").get(invoice.id).c;
+  assert.equal(after, before + 1, 'the on_post workflow must have run when this route posted the document');
+});
