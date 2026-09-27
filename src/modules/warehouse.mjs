@@ -147,6 +147,18 @@ export function generatePutaway(repo, receiptTxnId) {
     binMap.get(b.item_id).push(b);
   }
 
+  // Which lots this receipt actually put into the receiving bin -- inv.moveStock
+  // credits them there under their real lot/serial key, so put-away has to
+  // move exactly that key out again, not a blank one nothing was filed under.
+  const lotsByLine = new Map();
+  for (const l of lines) {
+    const rows = repo.query(
+      `SELECT lot_number, serial_no, quantity FROM txn_line_lot
+        WHERE tenant_id = :t AND source_type = ? AND source_id = ? AND source_line_id = ? AND direction = 'receive' AND reversed = 0`,
+      [receipt.type, receiptTxnId, l.id]);
+    if (rows.length) lotsByLine.set(l.id, rows);
+  }
+
   return repo.tx(() => {
     const created = [];
     for (const l of lines) {
@@ -155,15 +167,20 @@ export function generatePutaway(repo, receiptTxnId) {
       if (!item || !inv.isStocked(item)) continue;
       // Put stock where the same item already lives, else the first storage bin.
       const existing = binMap.get(l.item_id)?.[0];
-      const id = ulid();
-      repo.insert('putaway_task', {
-        id, receipt_txn_id: receiptTxnId, item_id: l.item_id,
-        from_bin_id: location.default_receiving_bin_id || null,
-        to_bin_id: existing?.bin_id || fallback?.id || null,
-        quantity: l.quantity, lot_number: '', status: 'pending',
-        completed_by: null, completed_at: null, created_at: nowIso(),
-      });
-      created.push(id);
+      const toBin = existing?.bin_id || fallback?.id || null;
+      const lotRows = lotsByLine.get(l.id);
+      const chunks = lotRows && lotRows.length ? lotRows : [{ lot_number: '', serial_no: '', quantity: l.quantity }];
+      for (const chunk of chunks) {
+        const id = ulid();
+        repo.insert('putaway_task', {
+          id, receipt_txn_id: receiptTxnId, item_id: l.item_id,
+          from_bin_id: location.default_receiving_bin_id || null,
+          to_bin_id: toBin,
+          quantity: chunk.quantity, lot_number: chunk.lot_number || '', serial_no: chunk.serial_no || '',
+          status: 'pending', completed_by: null, completed_at: null, created_at: nowIso(),
+        });
+        created.push(id);
+      }
     }
     return { receipt: receipt.txn_no, tasks: created.length };
   });
@@ -178,7 +195,7 @@ export function completePutaway(repo, taskId, { to_bin_id = null, quantity = nul
   const qty = quantity === null ? task.quantity : Qty.parse(quantity);
 
   return repo.tx(() => {
-    moveBin(repo, { item_id: task.item_id, from_bin_id: task.from_bin_id, to_bin_id: bin, quantity: Qty.toNumber(qty), lot_number: task.lot_number });
+    moveBin(repo, { item_id: task.item_id, from_bin_id: task.from_bin_id, to_bin_id: bin, quantity: Qty.toNumber(qty), lot_number: task.lot_number, serial_no: task.serial_no });
     repo.update('putaway_task', taskId, { status: 'complete', to_bin_id: bin, completed_by: by, completed_at: nowIso() });
     return repo.get('putaway_task', taskId);
   });
@@ -408,14 +425,46 @@ export function shipWave(repo, waveId, { txn_date = today(), carrier = '', track
       const tasks = repo.query(
         'SELECT * FROM pick_task WHERE tenant_id = :t AND wave_id = ? AND txn_id = ? AND quantity_picked > 0', [waveId, orderId]);
       const byLine = new Map();
-      for (const t of tasks) byLine.set(t.txn_line_id, (byLine.get(t.txn_line_id) || 0) + t.quantity_picked);
+      for (const t of tasks) {
+        const cur = byLine.get(t.txn_line_id) || { quantity: 0, lots: [] };
+        cur.quantity += t.quantity_picked;
+        // The wave already tracked which lot/serial each task pulled from
+        // (createWave, off bin_quantity) -- carry it through so the
+        // fulfilment consumes those same lots rather than losing the
+        // assignment and falling back to a fresh FEFO pick.
+        // custom.lots quantities are natural-unit API input, same as every
+        // other quantity a caller hands to computeLines -- not the scaled
+        // integer pick_task.quantity_picked is stored as.
+        if (t.lot_number || t.serial_no) cur.lots.push({ lot_number: t.lot_number || '', serial_no: t.serial_no || '', quantity: Qty.toNumber(t.quantity_picked) });
+        byLine.set(t.txn_line_id, cur);
+      }
       const ful = txnMod.transform(repo, orderId, 'FULFILLMENT', {
         txn_date, tracking_no: tracking_no || undefined,
-        lines: [...byLine].map(([source_line_id, quantity]) => ({ source_line_id, quantity: Qty.toNumber(quantity) })),
+        lines: [...byLine].map(([source_line_id, v]) => ({
+          source_line_id, quantity: Qty.toNumber(v.quantity),
+          lots: v.lots.length ? v.lots : undefined,
+        })),
       });
       fulfilments.push({ id: ful.id, txn_no: ful.txn_no });
       repo.exec('UPDATE package SET txn_id = ?, status = \'shipped\', shipped_at = ?, carrier = COALESCE(NULLIF(carrier, \'\'), ?), tracking_no = COALESCE(NULLIF(tracking_no, \'\'), ?) WHERE tenant_id = :t AND wave_id = ? AND (txn_id = ? OR txn_id IS NULL)',
         [ful.id, nowIso(), carrier, tracking_no, waveId, orderId]);
+
+      // Stock left the building at the fulfilment (inv.moveStock, above, via
+      // postTxn) but the staging bin it was picked into was never told --
+      // left uncorrected, packages already shipped stay "in" a bin forever
+      // and reconcileBins never stops flagging them.
+      const staging = repo.queryOne(
+        "SELECT id FROM bin WHERE tenant_id = :t AND location_id = ? AND bin_type = 'staging' AND active = 1 ORDER BY pick_sequence LIMIT 1",
+        [wave.location_id]);
+      if (staging) {
+        for (const t of tasks) {
+          if (!t.bin_id || !t.quantity_picked) continue;
+          moveBin(repo, {
+            item_id: t.item_id, from_bin_id: staging.id, to_bin_id: null,
+            quantity: Qty.toNumber(t.quantity_picked), lot_number: t.lot_number || '', serial_no: t.serial_no || '',
+          });
+        }
+      }
     });
   }
   return repo.tx(() => {

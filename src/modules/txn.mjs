@@ -19,6 +19,7 @@ import * as audit from '../core/audit.mjs';
 import { indexRecord } from '../core/search.mjs';
 import * as gl from './gl.mjs';
 import * as inv from './inventory.mjs';
+import * as lotsMod from './lots.mjs';
 import * as entities from './entities.mjs';
 import { postingAccounts } from './setup.mjs';
 import * as schedules from './schedules.mjs';
@@ -268,7 +269,9 @@ export function getTxn(repo, id, { withLines = true, withLinks = true } = {}) {
   const t = repo.get('txn', id);
   if (!t) return null;
   if (withLines) {
-    t.lines = repo.query(`SELECT tl.*, i.sku, i.name item_name, i.uom, a.number account_number, a.name account_name
+    t.lines = repo.query(`SELECT tl.*, i.sku, i.name item_name, i.uom, a.number account_number, a.name account_name,
+        (SELECT GROUP_CONCAT(lot_number || CASE WHEN serial_no != '' THEN '/' || serial_no ELSE '' END, ', ')
+           FROM txn_line_lot WHERE tenant_id = tl.tenant_id AND source_line_id = tl.id AND reversed = 0) AS lot_summary
         FROM txn_line tl
         LEFT JOIN item i ON i.tenant_id = tl.tenant_id AND i.id = tl.item_id
         LEFT JOIN account a ON a.tenant_id = tl.tenant_id AND a.id = tl.account_id
@@ -820,23 +823,39 @@ export function postTxn(repo, id) {
     if (cfg.stock === 'issue') {
       for (const l of lines) {
         if (!l.item_id) continue;
-        const r = inv.moveStock(repo, {
-          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: -l.quantity,
-          type: 'shipment', source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
-          item: itemMap.get(l.item_id),
-        });
+        const item = itemMap.get(l.item_id);
+        const locationId = l.location_id || t.location_id;
+        const r = lotsMod.isLotTracked(item)
+          ? lotsMod.issueLine(repo, {
+            item, location_id: locationId, quantity: l.quantity, entries: l.custom?.lots || null,
+            type: 'shipment', source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
+            source_line_id: l.id, allow_negative: true,
+          })
+          : inv.moveStock(repo, {
+            item_id: l.item_id, location_id: locationId, qty_delta: -l.quantity,
+            type: 'shipment', source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
+            item,
+          });
         l._cogs = Math.abs(r.value_delta);
       }
     } else if (cfg.stock === 'receive') {
       for (const l of lines) {
         if (!l.item_id) continue;
-        const r = inv.moveStock(repo, {
-          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
-          unit_cost: Money.convert(l.unit_price, t.fx_rate || 1),
-          type: 'receipt', source_type: t.type, source_id: id,
-          txn_date: t.txn_date, memo: t.txn_no,
-          item: itemMap.get(l.item_id),
-        });
+        const item = itemMap.get(l.item_id);
+        const locationId = l.location_id || t.location_id;
+        const unitCost = Money.convert(l.unit_price, t.fx_rate || 1);
+        const r = lotsMod.isLotTracked(item)
+          ? lotsMod.receiveLine(repo, {
+            item, location_id: locationId, quantity: l.quantity, unit_cost: unitCost,
+            entries: l.custom?.lots || null, type: 'receipt',
+            source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
+            source_line_id: l.id,
+          })
+          : inv.moveStock(repo, {
+            item_id: l.item_id, location_id: locationId, qty_delta: l.quantity,
+            unit_cost: unitCost, type: 'receipt', source_type: t.type, source_id: id,
+            txn_date: t.txn_date, memo: t.txn_no, item,
+          });
         l._value = r.value_delta;
       }
     } else if (t.type === 'VENDOR_BILL') {
@@ -853,22 +872,46 @@ export function postTxn(repo, id) {
         if (!item || !inv.isStocked(item)) continue;
         const baseAmount = Money.convert(l.amount, t.fx_rate || 1);
         const netUnitCost = l.quantity ? Math.round(baseAmount * 1_000_000 / l.quantity) : 0;
-        const r = inv.moveStock(repo, {
-          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
-          unit_cost: netUnitCost, type: 'receipt', source_type: t.type, source_id: id,
-          txn_date: t.txn_date, memo: t.txn_no,
-        });
+        const locationId = l.location_id || t.location_id;
+        const r = lotsMod.isLotTracked(item)
+          ? lotsMod.receiveLine(repo, {
+            item, location_id: locationId, quantity: l.quantity, unit_cost: netUnitCost,
+            entries: l.custom?.lots || null, type: 'receipt',
+            source_type: t.type, source_id: id, txn_date: t.txn_date, memo: t.txn_no,
+            source_line_id: l.id,
+          })
+          : inv.moveStock(repo, {
+            item_id: l.item_id, location_id: locationId, qty_delta: l.quantity,
+            unit_cost: netUnitCost, type: 'receipt', source_type: t.type, source_id: id,
+            txn_date: t.txn_date, memo: t.txn_no, item,
+          });
         l._value = r.value_delta;
       }
     } else if (cfg.stock === 'adjust') {
       for (const l of lines) {
         if (!l.item_id) continue;
-        const r = inv.moveStock(repo, {
-          item_id: l.item_id, location_id: l.location_id || t.location_id, qty_delta: l.quantity,
-          unit_cost: l.unit_cost || undefined, type: 'adjustment', source_type: t.type, source_id: id,
-          txn_date: t.txn_date, memo: t.memo || t.txn_no,
-          item: itemMap.get(l.item_id),
-        });
+        const item = itemMap.get(l.item_id);
+        const locationId = l.location_id || t.location_id;
+        let r;
+        if (lotsMod.isLotTracked(item) && l.quantity !== 0) {
+          r = l.quantity > 0
+            ? lotsMod.receiveLine(repo, {
+              item, location_id: locationId, quantity: l.quantity, unit_cost: l.unit_cost || undefined,
+              entries: l.custom?.lots || null, type: 'adjustment', source_type: t.type, source_id: id,
+              txn_date: t.txn_date, memo: t.memo || t.txn_no, source_line_id: l.id, autoLotPrefix: 'ADJ',
+            })
+            : lotsMod.issueLine(repo, {
+              item, location_id: locationId, quantity: -l.quantity, entries: l.custom?.lots || null,
+              type: 'adjustment', source_type: t.type, source_id: id, txn_date: t.txn_date,
+              memo: t.memo || t.txn_no, source_line_id: l.id, allow_negative: true,
+            });
+        } else {
+          r = inv.moveStock(repo, {
+            item_id: l.item_id, location_id: locationId, qty_delta: l.quantity,
+            unit_cost: l.unit_cost || undefined, type: 'adjustment', source_type: t.type, source_id: id,
+            txn_date: t.txn_date, memo: t.memo || t.txn_no, item,
+          });
+        }
         l._value = r.value_delta;
       }
     }
@@ -962,6 +1005,11 @@ export function voidTxn(repo, id, { reason = '' } = {}) {
           }
         }
       }
+      // Lot and serial quantities are a second ledger alongside inventory_txn
+      // (which the loop above already reversed) -- give back what was issued,
+      // and take away what was received, exactly at the lot the document
+      // touched, not just the item/location total.
+      lotsMod.reverseForSource(repo, t.type, id);
     }
     if (cfg.commits && ['open', 'partially_fulfilled'].includes(t.status)) commitLines(repo, id, -1);
     if (cfg.onOrder && ['open', 'partially_received'].includes(t.status)) onOrderLines(repo, id, -1);
@@ -1041,14 +1089,20 @@ export function transformPreview(repo, sourceId, targetType) {
   if (!(TRANSFORMS[src.type] || []).includes(targetType)) {
     throw badRequest(`A ${TYPES[src.type].label} cannot become a ${TYPES[targetType]?.label || targetType}`);
   }
-  const lines = src.lines.map((l) => ({
-    source_line_id: l.id, item_id: l.item_id, account_id: l.account_id, sku: l.sku,
-    description: l.description, uom: l.uom,
-    ordered: l.quantity, already: targetType === 'FULFILLMENT' ? l.qty_fulfilled : targetType === 'ITEM_RECEIPT' ? l.qty_received : l.qty_billed,
-    quantity: remainingFor(repo, l, targetType, src.type),
-    unit_price: l.unit_price, discount_pct: l.discount_pct, tax_code: l.tax_code,
-    location_id: l.location_id, department_id: l.department_id, class_id: l.class_id,
-  }));
+  const lines = src.lines.map((l) => {
+    const item = l.item_id ? repo.get('item', l.item_id) : null;
+    return {
+      source_line_id: l.id, item_id: l.item_id, account_id: l.account_id, sku: l.sku,
+      description: l.description, uom: l.uom,
+      ordered: l.quantity, already: targetType === 'FULFILLMENT' ? l.qty_fulfilled : targetType === 'ITEM_RECEIPT' ? l.qty_received : l.qty_billed,
+      quantity: remainingFor(repo, l, targetType, src.type),
+      unit_price: l.unit_price, discount_pct: l.discount_pct, tax_code: l.tax_code,
+      location_id: l.location_id, department_id: l.department_id, class_id: l.class_id,
+      // Lets the UI ask for exact lots/serials on a fulfilment or receipt
+      // line, rather than always falling back to an auto lot / FEFO pick.
+      track_lots: !!item?.track_lots, is_serialised: !!item?.is_serialised,
+    };
+  });
   return { source: src, target_type: targetType, lines: lines.filter((l) => l.quantity > 0), all_lines: lines };
 }
 
@@ -1103,6 +1157,12 @@ export function transform(repo, sourceId, targetType, input = {}) {
       tax_code: targetType === 'FULFILLMENT' ? '' : l.tax_code,
       location_id: req.location_id || l.location_id || src.location_id,
       department_id: l.department_id, class_id: l.class_id,
+      // A caller narrowing the quantity being pulled forward (a partial
+      // shipment, a partial receipt) also has to narrow which lots/serials
+      // that quantity comes from -- without carrying it through here, wave
+      // shipping and any other lot-aware transform would post the right
+      // quantity against no lot at all.
+      custom: req.custom || (req.lots ? { lots: req.lots } : {}),
       source_line_id: l.id,
     });
   }

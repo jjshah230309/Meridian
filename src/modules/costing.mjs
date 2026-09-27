@@ -228,7 +228,8 @@ export function openCount(repo, input = {}) {
   // at zero: a line that should be empty and is not is exactly the sort of
   // thing a count exists to find.
   const rows = repo.query(
-    `SELECT il.item_id, il.qty_on_hand, il.avg_cost, il.bin, i.sku, i.name, i.category, il.last_count_at
+    `SELECT il.item_id, il.qty_on_hand, il.avg_cost, il.bin, i.sku, i.name, i.category, il.last_count_at,
+            i.track_lots, i.is_serialised
      FROM item_location il
      JOIN item i ON i.tenant_id = il.tenant_id AND i.id = il.item_id
      WHERE il.tenant_id = :t AND il.location_id = ?
@@ -237,28 +238,60 @@ export function openCount(repo, input = {}) {
      LIMIT ${limit}`, params);
   if (!rows.length) throw unprocessable(`Nothing stocked at ${location.name} matches that scope.`);
 
+  // A lot- or serial-tracked item is counted lot by lot -- "12 units" is not
+  // an answer a counter walking the shelf can give when 4 different expiry
+  // dates are sitting there, and posting a bare item-level variance would
+  // have nowhere to put it back (which lot gained or lost the difference?).
+  const trackedIds = rows.filter((r) => r.track_lots || r.is_serialised).map((r) => r.item_id);
+  const lotsByItem = new Map();
+  if (trackedIds.length) {
+    const lotRows = repo.query(
+      `SELECT * FROM inventory_lot WHERE tenant_id = :t AND location_id = ? AND status = 'available'
+         AND item_id IN (${trackedIds.map(() => '?').join(',')}) ORDER BY item_id, lot_number, serial_no`,
+      [input.location_id, ...trackedIds]);
+    for (const l of lotRows) {
+      if (!lotsByItem.has(l.item_id)) lotsByItem.set(l.item_id, []);
+      lotsByItem.get(l.item_id).push(l);
+    }
+  }
+
   const now = nowIso();
   return repo.tx(() => {
     const id = ulid();
+    const lineSpecs = [];
+    for (const r of rows) {
+      const lots = (r.track_lots || r.is_serialised) ? lotsByItem.get(r.item_id) : null;
+      if (lots && lots.length) {
+        for (const lot of lots) {
+          lineSpecs.push({
+            item_id: r.item_id, bin: r.bin || '', expected_qty: lot.quantity, unit_cost: lot.unit_cost || r.avg_cost || 0,
+            lot_id: lot.id, lot_number: lot.lot_number, serial_no: lot.serial_no,
+          });
+        }
+      } else {
+        lineSpecs.push({ item_id: r.item_id, bin: r.bin || '', expected_qty: r.qty_on_hand || 0, unit_cost: r.avg_cost || 0, lot_id: null, lot_number: '', serial_no: '' });
+      }
+    }
     repo.insert('inventory_count', {
       id, count_no: nextNumber(repo, 'inventory_count'), location_id: input.location_id,
       subsidiary_id: input.subsidiary_id || location.subsidiary_id,
       name: input.name || `${scope === 'cycle' ? 'Cycle count' : 'Stock count'} — ${location.name}`,
       scope, category: input.category || '', count_date: countDate, status: 'open',
-      line_count: rows.length, counted_count: 0, variance_qty: 0, variance_value: 0,
+      line_count: lineSpecs.length, counted_count: 0, variance_qty: 0, variance_value: 0,
       adjustment_txn_id: null, notes: input.notes || '',
       created_at: now, created_by: repo.ctx?.user?.id || null,
     });
-    for (const r of rows) {
+    for (const spec of lineSpecs) {
       repo.insert('inventory_count_line', {
-        id: ulid(), count_id: id, item_id: r.item_id, bin: r.bin || '',
-        expected_qty: r.qty_on_hand || 0, counted_qty: null, unit_cost: r.avg_cost || 0,
+        id: ulid(), count_id: id, item_id: spec.item_id, bin: spec.bin,
+        expected_qty: spec.expected_qty, counted_qty: null, unit_cost: spec.unit_cost,
         variance_qty: 0, variance_value: 0, note: '', counted_at: null, counted_by: null,
+        lot_id: spec.lot_id, lot_number: spec.lot_number, serial_no: spec.serial_no,
       });
     }
     audit.record(repo, {
       recordType: 'inventory_count', recordId: id, action: 'open',
-      changes: { location: { from: null, to: location.name }, lines: { from: 0, to: rows.length } },
+      changes: { location: { from: null, to: location.name }, lines: { from: 0, to: lineSpecs.length } },
     });
     return getCount(repo, id);
   });
@@ -366,9 +399,16 @@ export function postCount(repo, id, { txn_date = null, memo = '' } = {}) {
         subsidiary_id: count.subsidiary_id, location_id: count.location_id, txn_date: date,
         memo: memo || `${count.count_no} — stock count at ${count.location?.name || 'location'}`,
         reference: count.count_no,
+        // A lot-tracked item's count lines are already one row per lot (see
+        // openCount), so each becomes its own single-direction adjustment
+        // line rather than being netted together -- one lot up and another
+        // down on the same item cannot be expressed as one signed quantity.
         lines: varied.map((l) => ({
           item_id: l.item_id, quantity: Qty.toNumber(l.variance_qty),
           unit_cost: Money.toNumber(l.unit_cost), description: `Counted ${Qty.toNumber(l.counted_qty)}, expected ${Qty.toNumber(l.expected_qty)}`,
+          custom: l.lot_number || l.serial_no
+            ? { lots: [{ lot_number: l.lot_number, serial_no: l.serial_no, quantity: Math.abs(Qty.toNumber(l.variance_qty)) }] }
+            : undefined,
         })),
       });
     }

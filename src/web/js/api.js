@@ -132,6 +132,9 @@ export const API = {
   valuation: (params) => get('/api/v1/inventory/valuation', params),
   setLevels: (body) => post('/api/v1/inventory/levels', body),
   createReorderPos: (suggestions) => post('/api/v1/inventory/reorder/create-pos', { suggestions }),
+  lots: (params) => get('/api/v1/inventory/lots', params),
+  expiringLots: (params) => get('/api/v1/inventory/lots/expiring', params),
+  lotTrace: (id) => get(`/api/v1/inventory/lots/${id}/trace`),
 
   pipeline: (params) => get('/api/v1/crm/pipeline', params),
   forecast: (params) => get('/api/v1/crm/forecast', params),

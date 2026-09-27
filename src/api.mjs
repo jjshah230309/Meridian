@@ -15,6 +15,7 @@ import { validate as validateExpr, evalSafe } from './core/expr.mjs';
 import * as meta from './modules/meta.mjs';
 import * as gl from './modules/gl.mjs';
 import * as inv from './modules/inventory.mjs';
+import * as lotsMod from './modules/lots.mjs';
 import * as entities from './modules/entities.mjs';
 import * as T from './modules/txn.mjs';
 import * as crm from './modules/crm.mjs';
@@ -498,6 +499,9 @@ export function buildApi({ config }) {
       } else if (type === 'item') {
         out.availability = inv.availability(ctx.repo, id);
         out.history = inv.itemHistory(ctx.repo, id, { limit: 40 });
+        if (record.track_lots || record.is_serialised) {
+          out.lots = lotsMod.lotsFor(ctx.repo, id, { status: 'available' });
+        }
         out.prices = ctx.repo.query(`SELECT ip.*, pl.name price_level_name FROM item_price ip
             JOIN price_level pl ON pl.tenant_id = ip.tenant_id AND pl.id = ip.price_level_id
             WHERE ip.tenant_id = :t AND ip.item_id = ? ORDER BY pl.name, ip.min_qty`, [id]);
@@ -754,6 +758,22 @@ export function buildApi({ config }) {
   r.get(`${P}/inventory/valuation`, async (ctx) => {
     rbac.require$(ctx.access, 'item', LEVEL.VIEW);
     return inv.valuation(ctx.repo, { locationId: ctx.query.location_id || null, asOf: ctx.query.as_of || null });
+  });
+
+  r.get(`${P}/inventory/lots`, async (ctx) => {
+    rbac.require$(ctx.access, 'item', LEVEL.VIEW);
+    if (!ctx.query.item_id) throw new ValidationError({ item_id: 'An item is required' });
+    return { lots: lotsMod.lotsFor(ctx.repo, ctx.query.item_id, { locationId: ctx.query.location_id || null, status: ctx.query.status || null }) };
+  });
+
+  r.get(`${P}/inventory/lots/expiring`, async (ctx) => {
+    rbac.require$(ctx.access, 'item', LEVEL.VIEW);
+    return { lots: lotsMod.expiringLots(ctx.repo, { withinDays: int(ctx.query.within_days, 30), locationId: ctx.query.location_id || null }) };
+  });
+
+  r.get(`${P}/inventory/lots/:id/trace`, async (ctx) => {
+    rbac.require$(ctx.access, 'item', LEVEL.VIEW);
+    return lotsMod.trace(ctx.repo, ctx.params.id);
   });
 
   r.post(`${P}/inventory/levels`, async (ctx) => {

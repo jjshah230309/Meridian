@@ -11,6 +11,7 @@ import { ulid, Money, Qty, nowIso, today, isValidDate, sum, round } from '../cor
 import { ValidationError, notFound, unprocessable } from '../core/http.mjs';
 import { nextNumber } from '../core/seq.mjs';
 import * as inv from './inventory.mjs';
+import * as lotsMod from './lots.mjs';
 import * as gl from './gl.mjs';
 import { postingAccounts } from './setup.mjs';
 import * as audit from '../core/audit.mjs';
@@ -301,22 +302,31 @@ export function issueComponents(repo, id, { lines = null, txn_date = today() } =
   if (lines !== null && lines !== undefined && !Array.isArray(lines)) {
     throw new ValidationError({ lines: 'Components to issue must be a list' });
   }
-  const wanted = new Map((lines || []).map((l) => [l.line_id || l.component_id, Qty.parse(l.quantity)]));
+  const wanted = new Map((lines || []).map((l) => [l.line_id || l.component_id, { qty: Qty.parse(l.quantity), lots: l.lots || null }]));
 
   return repo.tx(() => {
     let issuedValue = 0;
     const moved = [];
     for (const l of woLines(repo, id)) {
       const outstanding = Math.max(0, l.quantity_required - l.quantity_issued);
-      const qty = lines ? Math.min(outstanding, wanted.get(l.id) ?? wanted.get(l.component_id) ?? 0) : outstanding;
+      const want = lines ? (wanted.get(l.id) ?? wanted.get(l.component_id)) : null;
+      const qty = lines ? Math.min(outstanding, want?.qty ?? 0) : outstanding;
       if (qty <= 0) continue;
-      const res = inv.moveStock(repo, {
-        item_id: l.component_id, location_id: l.location_id || wo.location_id,
-        qty_delta: -qty, type: 'build_issue',
-        source_type: 'work_order', source_id: id, txn_date,
-        memo: `Issued to ${wo.order_no}`,
-      });
-      inv.release(repo, l.component_id, l.location_id || wo.location_id, qty);
+      const component = repo.get('item', l.component_id);
+      const locationId = l.location_id || wo.location_id;
+      const res = lotsMod.isLotTracked(component)
+        ? lotsMod.issueLine(repo, {
+          item: component, location_id: locationId, quantity: qty, entries: want?.lots || null,
+          type: 'build_issue', source_type: 'work_order', source_id: id, txn_date,
+          memo: `Issued to ${wo.order_no}`, source_line_id: l.id, allow_negative: true,
+        })
+        : inv.moveStock(repo, {
+          item_id: l.component_id, location_id: locationId,
+          qty_delta: -qty, type: 'build_issue',
+          source_type: 'work_order', source_id: id, txn_date,
+          memo: `Issued to ${wo.order_no}`,
+        });
+      inv.release(repo, l.component_id, locationId, qty);
       repo.update('work_order_line', l.id, { quantity_issued: l.quantity_issued + qty, unit_cost: res.unit_cost_used });
       issuedValue += -res.value_delta;
       moved.push({ sku: l.sku, quantity: Qty.toNumber(qty), value: Money.toNumber(-res.value_delta) });
@@ -403,7 +413,7 @@ export function logOperation(repo, id, operationId, { hours, complete = false })
  * Receive finished goods. The assembly enters stock at accrued cost per unit;
  * whatever remains in WIP after the last unit is variance.
  */
-export function buildWorkOrder(repo, id, { quantity = null, scrapped = 0, txn_date = today(), close = false } = {}) {
+export function buildWorkOrder(repo, id, { quantity = null, scrapped = 0, txn_date = today(), close = false, lots = null } = {}) {
   const wo = getWorkOrder(repo, id);
   if (!['released', 'in_progress'].includes(wo.status)) {
     throw unprocessable(`${wo.order_no} cannot be built while it is ${wo.status}`);
@@ -423,12 +433,19 @@ export function buildWorkOrder(repo, id, { quantity = null, scrapped = 0, txn_da
     // Scrap consumed cost but produced nothing, so only good units carry value.
     const unitCost = qty > 0 ? round(absorb / (qty / 1_000_000)) : 0;
 
-    const res = inv.moveStock(repo, {
-      item_id: wo.item_id, location_id: wo.location_id, qty_delta: qty,
-      unit_cost: unitCost, type: 'build_receive',
-      source_type: 'work_order', source_id: id, txn_date,
-      memo: `Built on ${wo.order_no}`,
-    });
+    const assembly = repo.get('item', wo.item_id);
+    const res = lotsMod.isLotTracked(assembly)
+      ? lotsMod.receiveLine(repo, {
+        item: assembly, location_id: wo.location_id, quantity: qty, unit_cost: unitCost,
+        entries: lots, type: 'build_receive', source_type: 'work_order', source_id: id, txn_date,
+        memo: `Built on ${wo.order_no}`, source_line_id: id, autoLotPrefix: 'BUILD',
+      })
+      : inv.moveStock(repo, {
+        item_id: wo.item_id, location_id: wo.location_id, qty_delta: qty,
+        unit_cost: unitCost, type: 'build_receive',
+        source_type: 'work_order', source_id: id, txn_date,
+        memo: `Built on ${wo.order_no}`,
+      });
 
     const builtTotal = wo.quantity_built + qty;
     const scrapTotal = wo.quantity_scrapped + scrap;

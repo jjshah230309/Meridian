@@ -88,6 +88,28 @@ the cycle scope orders by.
 A count where everything agrees posts with no adjustment at all. A posted count
 is closed; to change it, reverse the adjustment.
 
+## Lots and serial numbers
+
+Turn on **Track lots / expiry** or **Track serial numbers** on an item to
+follow individual batches or units from receipt to shipment:
+
+- A **lot-tracked** item (a batch with an expiry date, say) is issued
+  **first-expiry-first-out** by default — the item with the nearest expiry
+  date leaves first, wherever it is stocked. A receipt, fulfilment or
+  adjustment can also name exact lots, instead of leaving it to that default.
+- A **serialised** item tracks one unit at a time. A receipt must name every
+  serial number it takes in, and the same serial cannot be received twice
+  while it is still in stock.
+- The item's page lists every lot currently available, and each lot's own
+  page can **trace** it — every document that has ever received or issued
+  that lot, in order.
+- **Stock counts** count a tracked item lot by lot, and post one adjustment
+  line per lot that came out wrong, rather than one net figure for the whole
+  item.
+- Costing itself does not change: a lot's own cost is kept for reference, but
+  issues are still valued at the location's moving average, the same as any
+  other item.
+
 ## The warehouse
 
 For businesses picking and packing at volume:

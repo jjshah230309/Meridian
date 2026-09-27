@@ -11,6 +11,7 @@ import { ValidationError, notFound, unprocessable } from '../core/http.mjs';
 import { nextNumber } from '../core/seq.mjs';
 import * as txnMod from './txn.mjs';
 import * as inv from './inventory.mjs';
+import * as lotsMod from './lots.mjs';
 import * as gl from './gl.mjs';
 import { postingAccounts } from './setup.mjs';
 
@@ -183,24 +184,31 @@ export function addLines(repo, id, lines = []) {
         && contract.end_date >= today()
         && (contract.coverage === 'parts_labour' || (contract.coverage === 'parts_only' && type === 'part'));
 
+      const lineId = ulid();
       if (type === 'part' && item && inv.isStocked(item)) {
         // Van stock first -- that is where a field technician's parts really
         // are -- then the site the job was booked against. Falling through to
         // nothing would bill the customer for a part that never left stock.
         const fromLocation = tech?.van_location_id || order.location_id || tech?.home_location_id || defaultLocation(repo);
         if (!fromLocation) throw unprocessable(`${item.sku} cannot be issued: set a location on ${order.order_no}, or van stock on the technician`);
-        const res = inv.moveStock(repo, {
-          item_id: item.id, location_id: fromLocation, qty_delta: -quantity,
-          type: 'service_issue', source_type: 'service_order', source_id: id,
-          memo: `Used on ${order.order_no}`,
-        });
+        const res = lotsMod.isLotTracked(item)
+          ? lotsMod.issueLine(repo, {
+            item, location_id: fromLocation, quantity, entries: l.lots || null,
+            type: 'service_issue', source_type: 'service_order', source_id: id,
+            memo: `Used on ${order.order_no}`, source_line_id: lineId, allow_negative: true,
+          })
+          : inv.moveStock(repo, {
+            item_id: item.id, location_id: fromLocation, qty_delta: -quantity,
+            type: 'service_issue', source_type: 'service_order', source_id: id,
+            memo: `Used on ${order.order_no}`,
+          });
         unitCost = res.unit_cost_used;
         relieved.push({ item, value: -res.value_delta });
       }
 
       const amount = covered ? 0 : Qty.extend(quantity, unitPrice);
       repo.insert('service_line', {
-        id: ulid(), service_order_id: id, line_no: lineNo, line_type: type,
+        id: lineId, service_order_id: id, line_no: lineNo, line_type: type,
         item_id: l.item_id || null, description: l.description || item?.name || '',
         quantity, unit_price: unitPrice, unit_cost: unitCost, amount,
         billable: l.billable === false ? 0 : 1,

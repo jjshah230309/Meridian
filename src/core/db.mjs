@@ -45,7 +45,7 @@ export const TENANT_TABLES = new Set([
   'bom', 'bom_line', 'work_center', 'routing_step',
   'work_order', 'work_order_line', 'work_order_operation', 'quality_inspection',
   'bin', 'bin_quantity', 'inventory_lot', 'pick_wave', 'pick_task',
-  'package', 'putaway_task',
+  'package', 'putaway_task', 'txn_line_lot',
   'demand_plan', 'demand_plan_line', 'supply_suggestion',
   'campaign', 'partner', 'commission',
   'sales_channel', 'channel_listing', 'cart',

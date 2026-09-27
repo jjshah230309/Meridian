@@ -402,6 +402,14 @@ export const RECORDS = {
       }),
       F('preferred_vendor_id', 'Preferred vendor', 'reference', { ref: 'vendor', section: 'Purchasing' }),
       F('weight_g', 'Weight (g)', 'number' ),
+      F('track_lots', 'Track lots / expiry', 'checkbox', {
+        section: 'Tracking', width: 140,
+        help: 'Every receipt is assigned to a lot; issues are drawn first-expiry-first-out unless a document names exact lots.',
+      }),
+      F('is_serialised', 'Track serial numbers', 'checkbox', {
+        section: 'Tracking', width: 140,
+        help: 'Every unit is its own serial number, tracked one at a time from receipt to shipment.',
+      }),
       F('active', 'Active', 'checkbox', { width: 70 }),
       F('description', 'Description', 'longtext'),
       ...AUDIT_FIELDS,

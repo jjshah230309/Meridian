@@ -314,6 +314,14 @@ function relatedCards(type, data, go) {
     { label: 'Hours', num: true, render: (r) => fmt.num(r.hours, 1) },
     { label: 'Status', render: (r) => statusTag(r.status) },
   ], () => {}));
+  if (rel.lots) out.push(table('Lots & serials', rel.lots, [
+    { label: 'Lot', render: (r) => h('span.mono', r.lot_number) },
+    { label: 'Serial', render: (r) => (r.serial_no ? h('span.mono', r.serial_no) : h('span.faint', '—')) },
+    { label: 'Location', render: (r) => r.location_name || '—' },
+    { label: 'Qty', num: true, render: (r) => fmt.qty(r.quantity) },
+    { label: 'Expires', render: (r) => (r.expiry_date ? fmt.date(r.expiry_date) : h('span.faint', '—')) },
+    { label: 'Status', render: (r) => statusTag(r.status) },
+  ], (r) => go(`/record/inventory_lot/${r.id}`)));
   if (rel.history) out.push(table('Stock movements', rel.history, [
     { label: 'Date', render: (r) => fmt.date(r.txn_date) },
     { label: 'Type', render: (r) => fmt.titleCase(r.type) },

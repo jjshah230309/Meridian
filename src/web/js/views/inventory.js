@@ -26,15 +26,16 @@ export async function inventoryView(_route, { go }) {
 
   async function load() {
     mount(host, loading('Analysing stock'));
-    const [reorder, valuation] = await Promise.all([
+    const [reorder, valuation, expiring] = await Promise.all([
       API.reorder({ location_id: locationSel.value || undefined, lookback: lookbackSel.value }),
       API.valuation({ location_id: locationSel.value || undefined }),
+      API.expiringLots({ location_id: locationSel.value || undefined, within_days: 30 }),
     ]);
     selected.clear();
-    render(reorder.suggestions, valuation);
+    render(reorder.suggestions, valuation, expiring.lots);
   }
 
-  function render(suggestions, valuation) {
+  function render(suggestions, valuation, expiring) {
     const bySeverity = { stockout: 0, critical: 0, low: 0 };
     for (const s of suggestions) bySeverity[s.severity]++;
     const orderValue = suggestions.reduce((a, s) => a + s.estimated_cost, 0);
@@ -166,7 +167,19 @@ export async function inventoryView(_route, { go }) {
           h('td.num', fmt.money(v.total_value))))),
         h('tfoot', h('tr', h('td', { colspan: 5 }, 'Total inventory value'), h('td.num', fmt.money(valuation.total_value)))))));
 
-    mount(host, summary, table, valuationTable);
+    const expiringCard = expiring.length ? h('div.card', { style: { marginTop: '14px' } },
+      h('div.card-head', h('h2', 'Expiring soon'), h('span.muted', { style: { fontSize: '12px' } }, 'Within 30 days')),
+      h('div.grid-wrap', h('table.grid.compact',
+        h('thead', h('tr', h('th', 'SKU'), h('th', 'Item'), h('th', 'Lot / Serial'), h('th', 'Location'), h('th.num', 'Qty'), h('th', 'Expires'))),
+        h('tbody', ...expiring.map((l) => h('tr.clickable', { onclick: () => go(`/record/item/${l.item_id}`) },
+          h('td', h('span.mono', l.sku)),
+          h('td', h('span.cell-truncate', l.item_name)),
+          h('td', h('span.mono.faint', l.lot_number + (l.serial_no ? '/' + l.serial_no : ''))),
+          h('td.muted', l.location_name || '—'),
+          h('td.num', fmt.qty(l.quantity)),
+          h('td', fmt.date(l.expiry_date)))))))) : null;
+
+    mount(host, summary, table, valuationTable, expiringCard);
   }
 
   locationSel.addEventListener('change', load);

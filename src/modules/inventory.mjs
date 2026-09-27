@@ -49,6 +49,7 @@ export function createItem(repo, input) {
     taxable: input.taxable === 0 ? 0 : 1, tax_code: input.tax_code || 'STANDARD',
     weight_g: Number(input.weight_g || 0), barcode: input.barcode || '',
     lead_time_days: Number(input.lead_time_days || 7), is_serialised: input.is_serialised ? 1 : 0,
+    track_lots: input.track_lots ? 1 : 0,
     active: input.active === 0 ? 0 : 1, custom: input.custom || {}, created_at: now, updated_at: now,
   });
   audit.record(repo, { recordType: 'item', recordId: id, action: 'create', after: input });
@@ -61,7 +62,7 @@ export function updateItem(repo, id, patch) {
   const allowed = ['sku', 'name', 'description', 'type', 'category', 'uom', 'base_price', 'standard_cost',
     'purchase_price', 'costing_method', 'income_account_id', 'cogs_account_id', 'asset_account_id',
     'expense_account_id', 'preferred_vendor_id', 'taxable', 'tax_code', 'weight_g', 'barcode',
-    'lead_time_days', 'is_serialised', 'active', 'custom',
+    'lead_time_days', 'is_serialised', 'track_lots', 'active', 'custom',
     'revenue_template_id', 'expense_template_id'];
   const clean = {};
   for (const [k, v] of Object.entries(patch)) {
@@ -136,7 +137,7 @@ export function availability(repo, itemId) {
 export function moveStock(repo, {
   item_id, location_id, qty_delta, unit_cost = null, type, source_type = '', source_id = null,
   txn_date = null, memo = '', allow_negative = true, value_delta: valueOnly = null,
-  item = null, pos = null,
+  item = null, pos = null, lot_number = '', serial_no = '',
 }) {
   const resolvedItem = item || getItem(repo, item_id);
   if (!isStocked(resolvedItem)) {
@@ -205,7 +206,40 @@ export function moveStock(repo, {
     source_type, source_id, memo, created_at: nowIso(),
   });
 
+  // Goods that physically arrive have to land SOMEWHERE in a binned location,
+  // or a put-away task generated against the receiving bin fails outright
+  // ("that bin holds none of this item") because nothing ever put them
+  // there. This is the one place every receipt passes through, regardless of
+  // which document created it.
+  if (qty_delta > 0 && (type === 'receipt' || type === 'build_receive')) {
+    fillReceivingBin(repo, location_id, item_id, qty_delta, lot_number, serial_no);
+  }
+
   return { value_delta: valueDelta, unit_cost_used: unitCostUsed, avg_cost: avgAfter, qty_after: qtyAfter };
+}
+
+/**
+ * Credit a receipt to the location's default receiving bin. A no-op for a
+ * location that does not use bins, or one with no receiving bin configured
+ * -- put-away and picking are opt-in per location (`location.uses_bins`).
+ */
+function fillReceivingBin(repo, locationId, itemId, qty, lotNumber, serialNo) {
+  const loc = repo.get('location', locationId);
+  const binId = loc?.default_receiving_bin_id;
+  if (!loc?.uses_bins || !binId) return;
+  const existing = repo.queryOne(
+    'SELECT quantity FROM bin_quantity WHERE tenant_id = :t AND bin_id = ? AND item_id = ? AND lot_number = ? AND serial_no = ?',
+    [binId, itemId, lotNumber, serialNo]);
+  if (existing) {
+    repo.exec(
+      `UPDATE bin_quantity SET quantity = quantity + ?
+       WHERE tenant_id = :t AND bin_id = ? AND item_id = ? AND lot_number = ? AND serial_no = ?`,
+      [qty, binId, itemId, lotNumber, serialNo]);
+  } else {
+    repo.exec(
+      `INSERT INTO bin_quantity (tenant_id, bin_id, item_id, lot_number, serial_no, quantity, allocated)
+       VALUES (:t, ?, ?, ?, ?, ?, 0)`, [binId, itemId, lotNumber, serialNo, qty]);
+  }
 }
 
 /** Reserve stock against an open order. Commitments never move valuation. */

@@ -241,18 +241,99 @@ function lineColumnsFor(type) {
     cols.push({ label: 'Received', num: true, render: (l) => fmt.qty(l.qty_received) });
     cols.push({ label: 'Billed', num: true, render: (l) => fmt.qty(l.qty_billed) });
   }
+  if (['FULFILLMENT', 'ITEM_RECEIPT', 'VENDOR_RETURN', 'INVENTORY_ADJUSTMENT'].includes(type)) {
+    cols.push({ label: 'Lot / Serial', render: (l) => (l.lot_summary ? h('span.mono.faint', l.lot_summary) : '') });
+  }
   return cols;
+}
+
+// ---------------------------------------------------------- lot/serial entry
+/**
+ * A line whose item tracks lots or serials gets a small button that opens a
+ * dialog to name exactly which ones this document touches. Left untouched,
+ * a lot-tracked receipt auto-numbers one lot and an issue draws
+ * first-expiry-first-out -- fine for most receipts, but a serialised item
+ * has no such fallback: lots.mjs refuses a serialised receipt outright until
+ * serials are named, which is why the button is required rather than a
+ * convenience there.
+ */
+function lotsButton(row, isReceiving) {
+  const state = { lots: [] };
+  const label = () => state.lots.length
+    ? `${state.lots.length} lot${state.lots.length > 1 ? 's' : ''}/serial${state.lots.length > 1 ? 's' : ''}`
+    : (row.is_serialised ? 'Add serials' : 'Add lots');
+  const btn = h('button.btn.sm', { type: 'button', class: row.is_serialised && !state.lots.length ? 'danger' : '' }, label());
+  btn.onclick = () => {
+    const rows = state.lots.length ? state.lots.map((l) => ({ ...l })) : [{ lot_number: '', serial_no: '', expiry_date: '', quantity: '' }];
+    const body = h('div.lot-entry-rows');
+
+    function renderRow(r, i) {
+      const lotInput = row.is_serialised ? null : h('input', {
+        type: 'text', placeholder: 'Lot number', value: r.lot_number,
+        oninput: (e) => { r.lot_number = e.target.value; },
+      });
+      const serialInput = h('input', {
+        type: 'text', placeholder: 'Serial number', value: r.serial_no,
+        oninput: (e) => { r.serial_no = e.target.value; if (row.is_serialised) r.lot_number = e.target.value; },
+      });
+      const expiryInput = isReceiving ? h('input', {
+        type: 'date', value: r.expiry_date, oninput: (e) => { r.expiry_date = e.target.value; },
+      }) : null;
+      const qtyInput = h('input', {
+        type: 'number', step: 'any', class: 'num', placeholder: 'Qty',
+        value: row.is_serialised ? 1 : r.quantity, disabled: row.is_serialised,
+        oninput: (e) => { r.quantity = e.target.value; },
+      });
+      const removeBtn = h('button.btn.sm.icon-only', { type: 'button', onclick: () => { rows.splice(i, 1); draw(); } }, icon('x'));
+      return h('div.form-grid.compact', { style: { gridTemplateColumns: '1fr 1fr 1fr 90px 30px', marginBottom: '6px' } },
+        lotInput, serialInput, expiryInput, qtyInput, removeBtn);
+    }
+
+    function draw() {
+      clear(body);
+      mount(body, ...rows.map((r, i) => renderRow(r, i)));
+    }
+    draw();
+    modal({
+      title: row.is_serialised ? 'Serial numbers' : 'Lots',
+      size: 'narrow',
+      body: h('div', body,
+        h('button.btn.sm', { type: 'button', style: { marginTop: '8px' }, onclick: () => { rows.push({ lot_number: '', serial_no: '', expiry_date: '', quantity: '' }); draw(); } }, '+ Add row')),
+      actions: [
+        { label: 'Cancel', value: null },
+        {
+          label: 'Save', kind: 'primary',
+          onClick: () => {
+            const clean = rows
+              .map((r) => ({
+                lot_number: (r.lot_number || r.serial_no || '').trim(),
+                serial_no: (r.serial_no || '').trim(),
+                expiry_date: r.expiry_date || undefined,
+                quantity: row.is_serialised ? 1 : Number(r.quantity || 0),
+              }))
+              .filter((r) => (r.lot_number || r.serial_no) && r.quantity > 0);
+            state.lots = clean;
+            mount(btn, label()); btn.textContent = label();
+            btn.classList.toggle('danger', row.is_serialised && !clean.length);
+          },
+        },
+      ],
+    });
+  };
+  return { el: btn, get: () => state.lots };
 }
 
 // ------------------------------------------------------- transformation
 async function transformDialog(source, target, onDone) {
   const preview = await API.transformPreview(source.id, target);
   const cfg = store.state.meta.txn_types[target];
+  const isReceiving = target === 'ITEM_RECEIPT' || target === 'VENDOR_RETURN';
   const dateInput = h('input', { type: 'date', value: fmt.today() });
   const trackingInput = h('input', { type: 'text', placeholder: 'Tracking number' });
   const rows = preview.lines.map((l) => {
     const qty = h('input', { type: 'number', step: 'any', class: 'num', value: (l.quantity / 1e6), style: { width: '92px' } });
-    return { line: l, qty };
+    const lots = (l.track_lots || l.is_serialised) ? lotsButton(l, isReceiving) : null;
+    return { line: l, qty, lots };
   });
 
   if (!rows.length) {
@@ -267,22 +348,28 @@ async function transformDialog(source, target, onDone) {
         h('div.field', h('label', 'Date'), dateInput),
         target === 'FULFILLMENT' && h('div.field', h('label', 'Tracking number'), trackingInput)),
       h('table.grid.compact',
-        h('thead', h('tr', h('th', 'Item'), h('th', 'Description'), h('th.num', 'Ordered'), h('th.num', 'Already'), h('th.num', 'This document'))),
+        h('thead', h('tr', h('th', 'Item'), h('th', 'Description'), h('th.num', 'Ordered'), h('th.num', 'Already'), h('th.num', 'This document'), h('th', ''))),
         h('tbody', ...rows.map((r) => h('tr',
           h('td', h('span.mono', r.line.sku || '—')),
           h('td', h('span.cell-truncate', r.line.description)),
           h('td.num', fmt.qty(r.line.ordered)),
           h('td.num.muted', fmt.qty(r.line.already)),
-          h('td', r.qty)))))),
+          h('td', r.qty),
+          h('td', r.lots ? r.lots.el : '')))))),
     actions: [
       { label: 'Cancel', value: null },
       {
         label: `Create ${cfg.label.toLowerCase()}`, kind: 'primary',
         onClick: async () => {
           const lines = rows
-            .map((r) => ({ source_line_id: r.line.source_line_id, quantity: Number(r.qty.value || 0) }))
+            .map((r) => ({
+              source_line_id: r.line.source_line_id, quantity: Number(r.qty.value || 0),
+              lots: r.lots && r.lots.get().length ? r.lots.get() : undefined,
+            }))
             .filter((l) => l.quantity > 0);
           if (!lines.length) { toast('Enter a quantity on at least one line', { kind: 'warn' }); return false; }
+          const missingSerials = rows.find((r) => r.line.is_serialised && Number(r.qty.value || 0) > 0 && (!r.lots || !r.lots.get().length));
+          if (missingSerials) { toast(`${missingSerials.line.sku} needs its serial numbers named before this can be created`, { kind: 'warn' }); return false; }
           const created = await API.transform(source.id, target, {
             txn_date: dateInput.value, lines,
             tracking_no: trackingInput.value || undefined,
