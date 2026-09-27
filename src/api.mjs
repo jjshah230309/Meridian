@@ -17,6 +17,7 @@ import * as gl from './modules/gl.mjs';
 import * as inv from './modules/inventory.mjs';
 import * as lotsMod from './modules/lots.mjs';
 import * as pivot from './modules/pivot.mjs';
+import * as portal from './modules/portal.mjs';
 import * as entities from './modules/entities.mjs';
 import * as T from './modules/txn.mjs';
 import * as crm from './modules/crm.mjs';
@@ -34,6 +35,7 @@ import * as attachments from './modules/attachments.mjs';
 import { HANDLERS, coerce, genericCreate, genericUpdate, blockersFor } from './modules/records.mjs';
 import { registerOpsRoutes } from './api_ops.mjs';
 import { registerDataRoutes, registerODataRoutes, registerSoapRoutes } from './api_data.mjs';
+import { registerPortalRoutes } from './api_portal.mjs';
 
 const LEVEL = rbac.LEVEL;
 
@@ -493,10 +495,12 @@ export function buildApi({ config }) {
         out.contacts = ctx.repo.find('contact', { where: { company_type: 'customer', company_id: id }, order: 'last_name' });
         out.opportunities = ctx.repo.find('opportunity', { where: { customer_id: id }, order: 'expected_close DESC', limit: 20 });
         out.cases = ctx.repo.find('support_case', { where: { customer_id: id }, order: 'created_at DESC', limit: 20 });
+        if (rbac.can(ctx.access, 'customer', LEVEL.VIEW)) out.portal_users = portal.listForEntity(ctx.repo, 'customer', id);
       } else if (type === 'vendor') {
         out.financials = entities.vendorFinancials(ctx.repo, id);
         out.transactions = T.listTxns(ctx.repo, { entityId: id, limit: 25 }).rows;
         out.contacts = ctx.repo.find('contact', { where: { company_type: 'vendor', company_id: id }, order: 'last_name' });
+        if (rbac.can(ctx.access, 'vendor', LEVEL.VIEW)) out.portal_users = portal.listForEntity(ctx.repo, 'vendor', id);
       } else if (type === 'item') {
         out.availability = inv.availability(ctx.repo, id);
         out.history = inv.itemHistory(ctx.repo, id, { limit: 40 });
@@ -1366,6 +1370,8 @@ export function buildApi({ config }) {
   registerOpsRoutes(r, P);
   // Import, export, bank statement files and the Power BI connection helper.
   registerDataRoutes(r, P);
+  // Customer/vendor self-service, plus the staff-side invite/revoke routes.
+  registerPortalRoutes(r, P);
   // The OData feed sits at its own root, because BI tools expect a service
   // document at the address you hand them.
   registerODataRoutes(r);

@@ -135,3 +135,16 @@ the account, and posts only the difference.
 It is a standing provision, not a period entry: each run adjusts it to the new
 target. Writing an invoice off against the allowance draws it down, and the
 next run tops it back up.
+
+## The customer and vendor portal
+
+A customer's or vendor's own record page has a **Portal access** card. **Invite**
+sends an email with a link to set a password; from then on they can sign in at
+`/portal` to see their own account — a customer sees invoices, credit memos
+and a statement; a vendor sees purchase orders, bills and payment history —
+and nothing belonging to anyone else. **Revoke** ends that immediately.
+
+The portal is a separate sign-in from the staff application, with its own
+session: a portal user has no role and no permissions, because there is
+nothing for a permission to restrict — every query the portal runs is already
+scoped to that one customer or vendor account.

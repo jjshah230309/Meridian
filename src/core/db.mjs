@@ -24,7 +24,7 @@ import { ulid, nowIso, safeJson } from './util.mjs';
  * access to everything else, goes through Repo and is scoped.
  */
 export const TENANT_TABLES = new Set([
-  'session',
+  'session', 'portal_session',
   'app_user', 'role', 'permission', 'role_restriction', 'user_role', 'api_token',
   'audit_event', 'sequence', 'custom_field', 'saved_search', 'dashboard', 'custom_report',
   'workflow', 'workflow_log', 'server_script', 'notification', 'search_doc',
@@ -70,6 +70,7 @@ export const TENANT_TABLES = new Set([
   'accounting_book', 'book_adjustment', 'book_adjustment_line', 'book_balance',
   'asset_book_rule',
   'attachment',
+  'portal_user',
 ]);
 
 /**

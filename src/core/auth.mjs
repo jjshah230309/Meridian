@@ -8,6 +8,8 @@ import { ulid, randomToken, sha256, nowIso, timingSafeEqual } from './util.mjs';
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 export const SESSION_COOKIE = 'meridian_sid';
 export const SESSION_TTL_HOURS = 12;
+export const PORTAL_SESSION_COOKIE = 'meridian_portal_sid';
+export const PORTAL_SESSION_TTL_HOURS = 24 * 14; // a customer checking a statement is not a 12-hour-a-day user
 const MAX_FAILED_LOGINS = 8;
 const LOCKOUT_MINUTES = 15;
 
@@ -115,6 +117,49 @@ export const destroyUserSessions = (db, tenantId, userId) =>
 export const purgeExpiredSessions = (db) =>
   db.prepare('DELETE FROM session WHERE expires_at < ?').run(nowIso()).changes;
 
+// ------------------------------------------------------ portal sessions
+// The same digest-before-tenant-is-known pattern as `session` above, kept
+// in its own table (and cookie) so a portal session and a staff session can
+// never be confused for each other -- a portal token read against `session`
+// finds nothing, and vice versa.
+export function createPortalSession(db, { tenantId, portalUserId, ip = '', userAgent = '', ttlHours = PORTAL_SESSION_TTL_HOURS }) {
+  const token = randomToken(32);
+  const id = sha256(token);
+  const now = new Date();
+  const expires = new Date(now.getTime() + ttlHours * 3600_000);
+  db.prepare(`INSERT INTO portal_session (id, tenant_id, portal_user_id, created_at, expires_at, last_seen_at, ip, user_agent)
+              VALUES (?,?,?,?,?,?,?,?)`)
+    .run(id, tenantId, portalUserId, now.toISOString(), expires.toISOString(), now.toISOString(), ip, String(userAgent).slice(0, 250));
+  return { token, id, expiresAt: expires.toISOString() };
+}
+
+export function readPortalSession(db, token) {
+  if (!token) return null;
+  const row = db.prepare('SELECT * FROM portal_session WHERE id = ?').get(sha256(token));
+  if (!row) return null;
+  if (Date.parse(row.expires_at) < Date.now()) {
+    db.prepare('DELETE FROM portal_session WHERE id = ?').run(row.id);
+    return null;
+  }
+  const now = nowIso();
+  if (Date.parse(now) - Date.parse(row.last_seen_at) > 60_000) {
+    db.prepare('UPDATE portal_session SET last_seen_at = ? WHERE id = ?').run(now, row.id);
+  }
+  return row;
+}
+
+export const destroyPortalSession = (db, token) => { if (token) db.prepare('DELETE FROM portal_session WHERE id = ?').run(sha256(token)); };
+export const destroyPortalUserSessions = (db, portalUserId) =>
+  db.prepare('DELETE FROM portal_session WHERE portal_user_id = ?').run(portalUserId);
+export const purgeExpiredPortalSessions = (db) =>
+  db.prepare('DELETE FROM portal_session WHERE expires_at < ?').run(nowIso()).changes;
+
+/** A portal session's own CSRF token, HMAC'd with a different label so it can never be replayed as a staff CSRF token. */
+export const portalCsrfFor = (secret, sessionId) =>
+  crypto.createHmac('sha256', secret).update('portal-csrf:' + sessionId).digest('base64url');
+export const portalCsrfValid = (secret, sessionId, presented) =>
+  !!presented && timingSafeEqual(portalCsrfFor(secret, sessionId), presented);
+
 // ----------------------------------------------------------------- CSRF
 // Double-submit, stateless: the token is an HMAC over the session id, so it
 // is unforgeable without the server secret and needs no extra storage.
@@ -151,6 +196,30 @@ export function authenticate(db, { tenantId, email, password, ip, userAgent }) {
   db.prepare('UPDATE app_user SET failed_logins = 0, locked_until = NULL, last_login_at = ? WHERE tenant_id = ? AND id = ?')
     .run(nowIso(), tenantId, user.id);
   const session = createSession(db, { tenantId, userId: user.id, ip, userAgent });
+  return { ok: true, user, session };
+}
+
+/** The same login shape as authenticate(), against portal_user instead of app_user. */
+export function authenticatePortalUser(db, { tenantId, email, password, ip, userAgent }) {
+  const user = db.prepare('SELECT * FROM portal_user WHERE tenant_id = ? AND lower(email) = lower(?)').get(tenantId, String(email || ''));
+  const passwordOk = user
+    ? verifyPassword(password, user.password_hash, user.password_salt)
+    : (crypto.scryptSync('decoy', 'decoy', SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p }), false);
+  if (!user) return { ok: false, reason: 'invalid_credentials' };
+  if (user.status !== 'active') return { ok: false, reason: user.status === 'invited' ? 'invite_not_accepted' : 'account_disabled' };
+  if (user.locked_until && Date.parse(user.locked_until) > Date.now()) {
+    return { ok: false, reason: 'account_locked', until: user.locked_until };
+  }
+  if (!passwordOk) {
+    const failed = (user.failed_logins || 0) + 1;
+    const lock = failed >= MAX_FAILED_LOGINS ? new Date(Date.now() + LOCKOUT_MINUTES * 60000).toISOString() : null;
+    db.prepare('UPDATE portal_user SET failed_logins = ?, locked_until = ? WHERE tenant_id = ? AND id = ?')
+      .run(failed, lock, tenantId, user.id);
+    return { ok: false, reason: lock ? 'account_locked' : 'invalid_credentials', until: lock };
+  }
+  db.prepare('UPDATE portal_user SET failed_logins = 0, locked_until = NULL, last_login_at = ? WHERE tenant_id = ? AND id = ?')
+    .run(nowIso(), tenantId, user.id);
+  const session = createPortalSession(db, { tenantId, portalUserId: user.id, ip, userAgent });
   return { ok: true, user, session };
 }
 

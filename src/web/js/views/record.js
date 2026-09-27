@@ -314,6 +314,9 @@ function relatedCards(type, data, go) {
     { label: 'Hours', num: true, render: (r) => fmt.num(r.hours, 1) },
     { label: 'Status', render: (r) => statusTag(r.status) },
   ], () => {}));
+  if ((type === 'customer' || type === 'vendor') && rel.portal_users !== undefined) {
+    out.push(portalAccessCard(type, data.record, rel.portal_users));
+  }
   if (rel.lots) out.push(table('Lots & serials', rel.lots, [
     { label: 'Lot', render: (r) => h('span.mono', r.lot_number) },
     { label: 'Serial', render: (r) => (r.serial_no ? h('span.mono', r.serial_no) : h('span.faint', '—')) },
@@ -575,6 +578,55 @@ export async function paymentModal(entityType, entity, onDone) {
       },
     ],
   });
+}
+
+function portalAccessCard(entityType, record, users) {
+  const canManage = store.can(entityType, store.LEVEL.FULL);
+  const isCustomer = entityType === 'customer';
+
+  function invite() {
+    const emailInput = h('input', { type: 'email', placeholder: 'name@company.com', value: record.email || '' });
+    modal({
+      title: `Invite to the ${isCustomer ? 'customer' : 'vendor'} portal`,
+      body: h('div',
+        h('div.muted', { style: { marginBottom: '10px', fontSize: '12.5px', lineHeight: 1.5 } },
+          `They will get an email with a link to set a password and sign in to see ${isCustomer ? 'invoices and statements' : 'purchase orders, bills and payment status'}.`),
+        h('div.field', h('label', 'Email'), emailInput)),
+      actions: [
+        { label: 'Cancel', value: null },
+        {
+          label: 'Send invite', kind: 'primary',
+          onClick: async () => {
+            try {
+              await API.portalInvite(entityType, record.id, { email: emailInput.value.trim() });
+              toast('Invitation queued', { kind: 'success' });
+              window.location.reload();
+            } catch (e) { notifyError(e); return false; }
+          },
+        },
+      ],
+    });
+  }
+
+  async function revoke(u) {
+    const ok = await confirm({ title: 'Revoke portal access?', message: `${u.email} will no longer be able to sign in.`, confirmLabel: 'Revoke', danger: true });
+    if (!ok) return;
+    try { await API.portalRevoke(u.id); toast('Access revoked', { kind: 'success' }); window.location.reload(); }
+    catch (e) { notifyError(e); }
+  }
+
+  return h('div.card',
+    h('div.card-head', h('h2', 'Portal access'),
+      h('div.actions', canManage && h('button.btn.sm', { onclick: invite }, icon('plus', { size: 13 }), 'Invite'))),
+    h('div.card-body',
+      users.length ? h('div.grid-wrap', h('table.grid.compact',
+        h('thead', h('tr', h('th', 'Email'), h('th', 'Status'), h('th', 'Last sign-in'), h('th', ''))),
+        h('tbody', ...users.map((u) => h('tr',
+          h('td', u.email),
+          h('td', statusTag(u.status)),
+          h('td.muted', u.last_login_at ? fmt.dateTime(u.last_login_at) : 'Never'),
+          h('td', canManage && u.status !== 'revoked' && h('button.btn.sm.ghost', { onclick: () => revoke(u) }, 'Revoke')))))))
+        : h('div.muted', { style: { fontSize: '12.5px' } }, `No one has portal access to this ${isCustomer ? 'customer' : 'vendor'} yet.`)));
 }
 
 async function stockLevelsModal(item, onDone) {

@@ -125,6 +125,9 @@ export const API = {
   payment: (body) => post('/api/v1/payments', body),
   unapply: (id, txn_id) => post(`/api/v1/payments/${id}/unapply`, { txn_id }),
   openDocuments: (entityType, id) => get(`/api/v1/entities/${entityType}/${id}/open-documents`),
+  portalUsers: (entityType, id) => get(`/api/v1/entities/${entityType}/${id}/portal-users`),
+  portalInvite: (entityType, id, body) => post(`/api/v1/entities/${entityType}/${id}/portal-invite`, body),
+  portalRevoke: (id) => post(`/api/v1/setup/portal-users/${id}/revoke`),
   priceQuote: (body) => post('/api/v1/pricing/quote', body),
 
   availability: (itemId) => get(`/api/v1/inventory/availability/${itemId}`),

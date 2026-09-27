@@ -101,7 +101,11 @@ const MIME = {
 /** Serve a file from the web directory, with ETag and gzip. */
 function serveStatic(req, res, config, pathname) {
   let rel = decodeURIComponent(pathname.replace(/^\/+/, ''));
-  if (rel === '' || !path.extname(rel)) rel = 'index.html';        // SPA fallback
+  // SPA fallback -- a bare route with no file extension is a client-side
+  // route, resolved to whichever shell owns it. /portal/accept, /portal/
+  // and any deeper /portal/... route all go to the portal's own shell, not
+  // the staff one: they carry no staff session and must never see it.
+  if (rel === '' || !path.extname(rel)) rel = pathname.startsWith('/portal') ? 'portal.html' : 'index.html';
   const full = path.resolve(config.webDir, rel);
   // Path traversal guard: the resolved path must stay inside webDir.
   if (!full.startsWith(config.webDir + path.sep) && full !== config.webDir) {
@@ -200,8 +204,62 @@ export function createServer(config, db) {
         if (body === null) body = {};
       }
 
-      // ---- identity
       const cookies = httpx.parseCookies(req.headers.cookie);
+
+      // ---- portal identity: a separate branch, never crossing into the
+      // staff identity below. A portal session read against `session`
+      // (or a staff session token read against `portal_session`) finds
+      // nothing either way -- there is no shared table to confuse.
+      if (opts.portal) {
+        let portalUser = null, tenant = null, repo = null, csrf = null, portalSession = null;
+        const portalToken = cookies[auth.PORTAL_SESSION_COOKIE] || null;
+        if (portalToken) portalSession = auth.readPortalSession(db, portalToken);
+        if (portalSession) {
+          tenant = db.prepare('SELECT * FROM tenant WHERE id = ?').get(portalSession.tenant_id);
+          if (tenant && tenant.status === 'active') {
+            const row = db.prepare('SELECT * FROM portal_user WHERE tenant_id = ? AND id = ?').get(tenant.id, portalSession.portal_user_id);
+            if (row && row.status === 'active') {
+              portalUser = row;
+              repo = new Repo(db, tenant.id, { portalUser });
+              csrf = auth.portalCsrfFor(config.secret, portalSession.id);
+            }
+          }
+        }
+        if (!opts.public && !portalUser) {
+          return httpx.sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Please sign in to continue.', requestId } });
+        }
+        if (portalUser && MUTATING.has(req.method)) {
+          const presented = req.headers['x-csrf-token'] || body?.__csrf;
+          if (!auth.portalCsrfValid(config.secret, portalSession.id, presented)) {
+            return httpx.sendJson(res, 403, { error: { code: 'CSRF_FAILED', message: 'Your session token is missing or stale. Refresh the page and try again.', requestId } });
+          }
+          const origin = req.headers.origin;
+          if (origin) {
+            const host = req.headers.host;
+            try { if (new URL(origin).host !== host) return httpx.sendJson(res, 403, { error: { code: 'BAD_ORIGIN', message: 'Cross-origin write rejected.', requestId } }); }
+            catch { return httpx.sendJson(res, 403, { error: { code: 'BAD_ORIGIN', message: 'Cross-origin write rejected.', requestId } }); }
+          }
+        }
+        const ctx = {
+          req, res, db, config, params, body, ip, requestId,
+          query: httpx.parseQuery(parsed.searchParams),
+          portalUser, portalSession, tenant, repo, csrf,
+          tx: (fn) => transaction(db, fn),
+          setPortalSessionCookie: (token) => res.setHeader('Set-Cookie', httpx.serializeCookie(auth.PORTAL_SESSION_COOKIE, token, {
+            // Lax, not Strict: a customer paying through a hosted checkout
+            // page has to come BACK from a different origin (feature 6) and
+            // still be recognised, which Strict would refuse.
+            maxAge: auth.PORTAL_SESSION_TTL_HOURS * 3600, httpOnly: true, sameSite: 'Lax',
+            secure: (req.headers['x-forwarded-proto'] === 'https'),
+          })),
+          clearPortalSessionCookie: () => res.setHeader('Set-Cookie', httpx.serializeCookie(auth.PORTAL_SESSION_COOKIE, '', { maxAge: 0 })),
+        };
+        const result = await route.handler(ctx);
+        if (res.writableEnded) return;
+        return httpx.sendJson(res, req.method === 'POST' && result?.id && route.opts?.created ? 201 : 200, result ?? { ok: true }, { 'X-Request-Id': requestId });
+      }
+
+      // ---- identity
       const sessionToken = cookies[auth.SESSION_COOKIE] || null;
       const authHeader = req.headers.authorization || '';
       let bearer = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1] || null;
@@ -378,6 +436,7 @@ async function main() {
   }
 
   auth.purgeExpiredSessions(db);
+  auth.purgeExpiredPortalSessions(db);
   if (config.exitAfter) { db.close(); return; }
 
   const server = createServer(config, db);
@@ -418,6 +477,7 @@ async function main() {
   const housekeeping = setInterval(() => {
     try {
       auth.purgeExpiredSessions(db);
+      auth.purgeExpiredPortalSessions(db);
       db.exec('PRAGMA wal_checkpoint(PASSIVE)');
     } catch (e) { console.error('housekeeping:', e.message); }
   }, 3600_000);
