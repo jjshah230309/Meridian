@@ -148,3 +148,17 @@ The portal is a separate sign-in from the staff application, with its own
 session: a portal user has no role and no permissions, because there is
 nothing for a permission to restrict — every query the portal runs is already
 scoped to that one customer or vendor account.
+
+## Collecting payment online
+
+**Setup → Integrations → Online payments** starts in **Demo mode**: every
+invoice gets a real Pay button, a customer can go through the whole flow, and
+a real customer payment is posted and applied — but nothing is ever actually
+charged. Connect **Stripe** (a secret key, and a webhook signing secret so a
+completed Stripe Checkout session posts the payment on its own, not only when
+the customer happens to land back on the success page) to take it live.
+
+From an invoice, **Copy pay link** or **Email pay link** gives a customer a
+one-click way to pay without a portal account at all — a signed link to that
+one invoice, good for 30 days, that asks for nothing but a card number. The
+same **Pay** button appears on the invoice inside the customer portal itself.

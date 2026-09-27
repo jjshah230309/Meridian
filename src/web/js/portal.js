@@ -180,13 +180,27 @@ async function renderDashboard() {
       ])));
 }
 
+async function payForDocument(id) {
+  try {
+    const checkout = await post(`${P}/documents/${id}/checkout`, {});
+    if (checkout.provider === 'stripe') { window.location.href = checkout.redirect_url; return; }
+    const ok = window.confirm(`Confirm a demo payment of ${fmt.money(checkout.amount, checkout.currency)}? No real money moves.`);
+    if (!ok) return;
+    await post(`/api/v1/payments/demo/${checkout.intent_id}/confirm`, {});
+    toast('Payment recorded', 'success');
+    renderDocument(id);
+  } catch (e) { toast(errorMessage(e), 'error'); }
+}
+
 async function renderDocument(id) {
   mount(root, h('div.login-wrap', h('div.spinner')));
   let doc;
   try { doc = await get(`${P}/documents/${id}`); }
   catch (e) { shell('Document', h('div.err', errorMessage(e))); return; }
+  const paidJustNow = new URLSearchParams(window.location.search).get('paid') === '1';
 
   shell(`${fmt.titleCase(doc.type.replace(/_/g, ' ').toLowerCase())} ${doc.txn_no}`,
+    paidJustNow ? h('div.tag.green', { style: { marginBottom: '14px' } }, '✓ Payment received') : null,
     h('div.card', { style: { marginBottom: '14px' } },
       h('div.card-body', h('div.form-grid',
         h('div.field', h('label', 'Date'), fmt.date(doc.txn_date)),
@@ -194,7 +208,9 @@ async function renderDocument(id) {
         h('div.field', h('label', 'Status'), fmt.titleCase(doc.status)),
         h('div.field', h('label', 'Total'), fmt.money(doc.total, doc.currency)),
         doc.amount_remaining ? h('div.field', h('label', 'Balance'), h('strong', fmt.money(doc.amount_remaining, doc.currency))) : null,
-        doc.memo && h('div.field.full', h('label', 'Memo'), doc.memo)))),
+        doc.memo && h('div.field.full', h('label', 'Memo'), doc.memo))),
+      doc.type === 'INVOICE' && doc.amount_remaining > 0 ? h('div.card-body', { style: { borderTop: '1px solid var(--border)' } },
+        h('button.btn.primary', { onclick: () => payForDocument(id) }, icon('credit-card', { size: 13 }), `Pay ${fmt.money(doc.amount_remaining, doc.currency)}`)) : null),
     doc.lines?.length ? h('div.card',
       h('div.card-head', h('h2', 'Lines')),
       h('div.grid-wrap', h('table.grid',

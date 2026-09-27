@@ -201,6 +201,11 @@ export const API = {
   emailSettings: () => get('/api/v1/setup/email-settings'),
   saveEmailSettings: (body) => put('/api/v1/setup/email-settings', body),
   sendTestEmail: (to) => post('/api/v1/setup/email-settings/test', { to }),
+  paymentSettings: () => get('/api/v1/setup/payment-settings'),
+  savePaymentSettings: (body) => put('/api/v1/setup/payment-settings', body),
+  testPaymentConnection: (secret_key) => post('/api/v1/setup/payment-settings/test', { secret_key }),
+  payLink: (invoiceId) => post(`/api/v1/txn/${invoiceId}/pay-link`),
+  emailPayLink: (invoiceId) => post(`/api/v1/txn/${invoiceId}/email-pay-link`),
   // ---- attachments
   listAttachments: (record_type, record_id) => get('/api/v1/attachments', { record_type, record_id }),
   uploadAttachment: (record_type, record_id, filename, content_type, data) =>

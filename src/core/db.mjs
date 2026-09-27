@@ -71,6 +71,7 @@ export const TENANT_TABLES = new Set([
   'asset_book_rule',
   'attachment',
   'portal_user',
+  'payment_intent',
 ]);
 
 /**

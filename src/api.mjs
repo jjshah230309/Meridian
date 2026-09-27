@@ -36,6 +36,7 @@ import { HANDLERS, coerce, genericCreate, genericUpdate, blockersFor } from './m
 import { registerOpsRoutes } from './api_ops.mjs';
 import { registerDataRoutes, registerODataRoutes, registerSoapRoutes } from './api_data.mjs';
 import { registerPortalRoutes } from './api_portal.mjs';
+import { registerPaymentRoutes } from './api_payments.mjs';
 
 const LEVEL = rbac.LEVEL;
 
@@ -1372,6 +1373,9 @@ export function buildApi({ config }) {
   registerDataRoutes(r, P);
   // Customer/vendor self-service, plus the staff-side invite/revoke routes.
   registerPortalRoutes(r, P);
+  // Online payment collection: settings, checkout, the Stripe webhook, and
+  // the signed guest pay-link routes.
+  registerPaymentRoutes(r, P);
   // The OData feed sits at its own root, because BI tools expect a service
   // document at the address you hand them.
   registerODataRoutes(r);

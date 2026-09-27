@@ -65,6 +65,25 @@ export async function txnView(route, { go }) {
       },
     }, t.type === 'INVOICE' ? 'Receive payment' : 'Pay bill'));
   }
+  if (t.type === 'INVOICE' && t.amount_remaining > 0) {
+    actions.push(h('button.btn', {
+      onclick: async () => {
+        try {
+          const { url } = await API.payLink(t.id);
+          await navigator.clipboard.writeText(url);
+          toast('Pay link copied', { kind: 'success' });
+        } catch (e) { notifyError(e); }
+      },
+    }, 'Copy pay link'));
+    if (t.entity?.email) {
+      actions.push(h('button.btn', {
+        onclick: async () => {
+          try { const r = await API.emailPayLink(t.id); toast(`Queued to ${r.to}`, { kind: 'success' }); }
+          catch (e) { notifyError(e); }
+        },
+      }, 'Email pay link'));
+    }
+  }
   if (!t.posted && !['voided', 'closed', 'cancelled'].includes(t.status) && store.can(permType, store.LEVEL.EDIT)) {
     actions.push(h('button.btn', { onclick: () => go(`/txn-edit/${permType}/${t.id}`) }, 'Edit'));
   }

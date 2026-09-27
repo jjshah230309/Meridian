@@ -485,8 +485,86 @@ async function emailSettingsCard(go) {
           'Not configured. Statements, dunning notices and remittance advice are produced as PDFs either way — set this up to also email them directly.')));
 }
 
+/** Editing form for Stripe. The secret and webhook secret are write-only,
+ * same "shown once" precedent as the SMTP password and the API tokens. */
+function editPaymentSettings(current, bankAccounts, onSaved) {
+  const providerSel = h('select', null,
+    h('option', { value: 'demo', selected: current.provider === 'demo' }, 'Demo (no real account, nothing charged)'),
+    h('option', { value: 'stripe', selected: current.provider === 'stripe' }, 'Stripe'));
+  const secretKey = h('input', { type: 'password', placeholder: current.has_secret_key ? 'Unchanged — leave blank to keep it' : 'sk_test_…' });
+  const webhookSecret = h('input', { type: 'password', placeholder: current.has_webhook_secret ? 'Unchanged — leave blank to keep it' : 'whsec_…' });
+  const publishableKey = h('input', { type: 'text', value: current.publishable_key || '', placeholder: 'pk_test_… (not secret)' });
+  const bankSel = h('select', null,
+    h('option', { value: '' }, 'Undeposited funds (default)'),
+    ...bankAccounts.map((b) => h('option', { value: b.id, selected: b.id === current.bank_account_id }, b.bank_name || b.number_masked || b.id)));
+  const testResult = h('div', { style: { marginTop: '8px' } });
+  const stripeFields = h('div',
+    h('div.field', h('label', 'Secret key', h('span.req', '*')), secretKey),
+    h('div.field', h('label', 'Webhook signing secret'),
+      h('div.muted', { style: { fontSize: '11.5px', marginBottom: '4px' } },
+        'Add an endpoint in the Stripe dashboard for checkout.session.completed, pointing at:'),
+      h('div.row', h('code', { style: { fontSize: '11px', wordBreak: 'break-all' } }, `${window.location.origin}/api/v1/payments/webhook/stripe/${store.state.tenant.id}`)),
+      webhookSecret),
+    h('div.field', h('label', 'Publishable key'), publishableKey),
+    h('div.field', h('label', 'Money lands in'), bankSel),
+    h('button.btn.sm', {
+      style: { marginTop: '4px' },
+      onclick: async () => {
+        try { const r = await API.testPaymentConnection(secretKey.value.trim() || undefined); mount(testResult, h('span.tag.green', `Connected${r.livemode ? '' : ' (test mode)'}`)); }
+        catch (e) { mount(testResult, h('span.err', e.message)); }
+      },
+    }, 'Test connection'), testResult);
+  const body = h('div');
+  function drawFields() {
+    clear(body);
+    mount(body, h('div.field', h('label', 'Provider'), providerSel), providerSel.value === 'stripe' ? stripeFields : null);
+  }
+  providerSel.addEventListener('change', drawFields);
+  drawFields();
+
+  modal({
+    title: 'Online payments', size: 'narrow', body,
+    actions: [
+      { label: 'Cancel', value: null },
+      {
+        label: 'Save', kind: 'primary',
+        onClick: async () => {
+          const patch = { provider: providerSel.value, publishable_key: publishableKey.value.trim(), bank_account_id: bankSel.value || null };
+          if (secretKey.value) patch.secret_key = secretKey.value;
+          if (webhookSecret.value) patch.webhook_secret = webhookSecret.value;
+          await API.savePaymentSettings(patch);
+          notifyOk('Payment settings saved');
+          onSaved();
+        },
+      },
+    ],
+  });
+}
+
+async function paymentsSettingsCard(go) {
+  const [current, bankRes] = await Promise.all([API.paymentSettings(), API.bankAccounts()]);
+  const bankAccounts = bankRes.accounts || [];
+  const bankName = (id) => bankAccounts.find((b) => b.id === id)?.bank_name || 'Undeposited funds';
+  return h('div.card', { style: { marginBottom: '14px' } },
+    h('div.card-head', h('h2', 'Online payments'),
+      store.state.user.is_owner && h('div.actions',
+        h('button.btn.sm', { onclick: () => editPaymentSettings(current, bankAccounts, () => go('/setup/integrations')) }, 'Edit'))),
+    h('div.card-body',
+      current.provider === 'demo'
+        ? h('div',
+          h('div.tag.amber', { style: { marginBottom: '8px' } }, 'Demo mode — invoices show a Pay button, but nothing is ever charged'),
+          h('div.muted', { style: { fontSize: '12.5px' } }, 'Connect Stripe to collect real payments from an emailed invoice or the customer portal.'))
+        : facts([
+          ['Provider', 'Stripe'],
+          ['Secret key', current.has_secret_key ? 'Set' : h('span.err', 'Not set')],
+          ['Webhook secret', current.has_webhook_secret ? 'Set' : h('span.muted', 'Not set — webhooks will be rejected')],
+          ['Money lands in', current.bank_account_id ? bankName(current.bank_account_id) : 'Undeposited funds'],
+        ])));
+}
+
 async function integrationsTab(go) {
   const email = await emailSettingsCard(go);
+  const paymentsCard = await paymentsSettingsCard(go);
   const { rows } = await API.integrationEvents();
 
   const retry = async (id) => {
@@ -521,5 +599,5 @@ async function integrationsTab(go) {
         'That makes retries idempotent and gives you an audit trail of what was sent and when. A failed delivery retries itself with a growing delay up to 8 attempts, then stops and can be retried by hand.'),
       h('div.tag.blue', { style: { marginTop: '10px' } }, `Server scripts: ${store.state.meta.scripts_enabled ? 'enabled' : 'disabled (recommended)'}`)));
 
-  return h('div', email, explainer, h('div.card', h('div.card-head', h('h2', 'Delivery log')), table));
+  return h('div', email, paymentsCard, explainer, h('div.card', h('div.card-head', h('h2', 'Delivery log')), table));
 }

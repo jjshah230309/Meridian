@@ -138,15 +138,21 @@ export class Router {
 }
 
 // -------------------------------------------------------------- requests
-export async function readBody(req, { limit = 8 * 1024 * 1024 } = {}) {
+export async function readBody(req, { limit = 8 * 1024 * 1024, raw: wantRaw = false } = {}) {
   const chunks = []; let size = 0;
   for await (const c of req) {
     size += c.length;
     if (size > limit) throw new HttpError(413, 'Request body too large');
     chunks.push(c);
   }
-  if (!chunks.length) return null;
+  if (!chunks.length) return wantRaw ? Buffer.alloc(0) : null;
   const raw = Buffer.concat(chunks);
+  // A webhook signature (Stripe's, or anyone else's) is computed over the
+  // exact bytes that arrived -- JSON.parse-then-stringify is not guaranteed
+  // to round-trip to the same bytes (key order, number formatting), so the
+  // route that needs to verify one asks for the Buffer untouched and parses
+  // it itself, after the signature has already been checked against it.
+  if (wantRaw) return raw;
   const ct = String(req.headers['content-type'] || '');
   if (ct.includes('application/json')) {
     try { return JSON.parse(raw.toString('utf8')); }

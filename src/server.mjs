@@ -105,7 +105,9 @@ function serveStatic(req, res, config, pathname) {
   // route, resolved to whichever shell owns it. /portal/accept, /portal/
   // and any deeper /portal/... route all go to the portal's own shell, not
   // the staff one: they carry no staff session and must never see it.
-  if (rel === '' || !path.extname(rel)) rel = pathname.startsWith('/portal') ? 'portal.html' : 'index.html';
+  if (rel === '' || !path.extname(rel)) {
+    rel = pathname.startsWith('/portal') ? 'portal.html' : pathname.startsWith('/pay/') ? 'pay.html' : 'index.html';
+  }
   const full = path.resolve(config.webDir, rel);
   // Path traversal guard: the resolved path must stay inside webDir.
   if (!full.startsWith(config.webDir + path.sep) && full !== config.webDir) {
@@ -197,11 +199,20 @@ export function createServer(config, db) {
         // a workbook of years of invoices, arriving base64-encoded inside the
         // JSON body -- genuinely need more room, declared explicitly per
         // route rather than raising the ceiling for everyone.
-        const parsed = await httpx.readBody(req, opts.bodyLimit ? { limit: opts.bodyLimit } : {});
-        body = parsed === null || typeof parsed === 'object' || typeof parsed === 'string' || Buffer.isBuffer(parsed)
-          ? parsed
-          : {};
-        if (body === null) body = {};
+        //
+        // `opts.rawBody` (a webhook whose signature is computed over the
+        // exact bytes received, e.g. Stripe's) skips JSON parsing entirely
+        // here -- the route reads ctx.body as a Buffer and parses it itself,
+        // after verifying the signature against it.
+        if (opts.rawBody) {
+          body = await httpx.readBody(req, { raw: true, ...(opts.bodyLimit ? { limit: opts.bodyLimit } : {}) });
+        } else {
+          const parsed = await httpx.readBody(req, opts.bodyLimit ? { limit: opts.bodyLimit } : {});
+          body = parsed === null || typeof parsed === 'object' || typeof parsed === 'string' || Buffer.isBuffer(parsed)
+            ? parsed
+            : {};
+          if (body === null) body = {};
+        }
       }
 
       const cookies = httpx.parseCookies(req.headers.cookie);
