@@ -206,6 +206,16 @@ export const API = {
   testPaymentConnection: (secret_key) => post('/api/v1/setup/payment-settings/test', { secret_key }),
   payLink: (invoiceId) => post(`/api/v1/txn/${invoiceId}/pay-link`),
   emailPayLink: (invoiceId) => post(`/api/v1/txn/${invoiceId}/email-pay-link`),
+
+  bankFeedSettings: () => get('/api/v1/setup/bank-feed-settings'),
+  saveBankFeedSettings: (body) => put('/api/v1/setup/bank-feed-settings', body),
+  testBankFeedConnection: (secret_id, secret_key) => post('/api/v1/setup/bank-feed-settings/test', { secret_id, secret_key }),
+  bankFeedInstitutions: (country) => get('/api/v1/bank/feeds/institutions', { country }),
+  bankFeeds: () => get('/api/v1/bank/feeds'),
+  connectBankFeed: (bankAccountId, institutionId) => post(`/api/v1/bank/${bankAccountId}/feed/connect`, { institution_id: institutionId }),
+  completeBankFeedLink: (requisitionId) => post('/api/v1/bank/feeds/complete', { requisition_id: requisitionId }),
+  syncBankFeed: (bankAccountId) => post(`/api/v1/bank/${bankAccountId}/feed/sync`),
+  disconnectBankFeed: (bankAccountId) => post(`/api/v1/bank/${bankAccountId}/feed/disconnect`),
   // ---- attachments
   listAttachments: (record_type, record_id) => get('/api/v1/attachments', { record_type, record_id }),
   uploadAttachment: (record_type, record_id, filename, content_type, data) =>

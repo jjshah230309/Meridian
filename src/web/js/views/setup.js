@@ -562,9 +562,59 @@ async function paymentsSettingsCard(go) {
         ])));
 }
 
+/** Editing form for GoCardless Bank Account Data credentials. */
+function editBankFeedSettings(current, onSaved) {
+  const secretId = h('input', { type: 'text', value: '', placeholder: current.has_credentials ? 'Unchanged — leave blank to keep it' : 'Secret ID' });
+  const secretKey = h('input', { type: 'password', placeholder: current.has_credentials ? 'Unchanged — leave blank to keep it' : 'Secret key' });
+  const testResult = h('div', { style: { marginTop: '8px' } });
+  modal({
+    title: 'Bank feeds (GoCardless)', size: 'narrow',
+    body: h('div',
+      h('div.muted', { style: { fontSize: '12.5px', marginBottom: '10px', lineHeight: 1.5 } },
+        'Create a free GoCardless Bank Account Data account, then paste its secret id and key here.'),
+      h('div.field', h('label', 'Secret ID'), secretId),
+      h('div.field', h('label', 'Secret key'), secretKey),
+      h('button.btn.sm', {
+        style: { marginTop: '4px' },
+        onclick: async () => {
+          try { await API.testBankFeedConnection(secretId.value.trim(), secretKey.value); mount(testResult, h('span.tag.green', 'Connected')); }
+          catch (e) { mount(testResult, h('span.err', e.message)); }
+        },
+      }, 'Test connection'), testResult),
+    actions: [
+      { label: 'Cancel', value: null },
+      {
+        label: 'Save', kind: 'primary',
+        onClick: async () => {
+          const patch = {};
+          if (secretId.value.trim()) patch.secret_id = secretId.value.trim();
+          if (secretKey.value) patch.secret_key = secretKey.value;
+          await API.saveBankFeedSettings(patch);
+          notifyOk('Bank feed credentials saved');
+          onSaved();
+        },
+      },
+    ],
+  });
+}
+
+async function bankFeedSettingsCard(go) {
+  const current = await API.bankFeedSettings();
+  return h('div.card', { style: { marginBottom: '14px' } },
+    h('div.card-head', h('h2', 'Bank feeds'),
+      store.state.user.is_owner && h('div.actions',
+        h('button.btn.sm', { onclick: () => editBankFeedSettings(current, () => go('/setup/integrations')) }, current.has_credentials ? 'Edit' : 'Set up'))),
+    h('div.card-body',
+      current.has_credentials
+        ? facts([['GoCardless', h('span.tag.green', 'Connected')]])
+        : h('div.muted', { style: { fontSize: '12.5px' } },
+          'Not configured. Bank statements can still be imported as a CSV/OFX/QFX/BAI2/CAMT.053 file — set this up to pull transactions in automatically instead. Once connected, "Connect live feed" appears on each bank account.')));
+}
+
 async function integrationsTab(go) {
   const email = await emailSettingsCard(go);
   const paymentsCard = await paymentsSettingsCard(go);
+  const bankFeedCard = await bankFeedSettingsCard(go);
   const { rows } = await API.integrationEvents();
 
   const retry = async (id) => {
@@ -599,5 +649,5 @@ async function integrationsTab(go) {
         'That makes retries idempotent and gives you an audit trail of what was sent and when. A failed delivery retries itself with a growing delay up to 8 attempts, then stops and can be retried by hand.'),
       h('div.tag.blue', { style: { marginTop: '10px' } }, `Server scripts: ${store.state.meta.scripts_enabled ? 'enabled' : 'disabled (recommended)'}`)));
 
-  return h('div', email, paymentsCard, explainer, h('div.card', h('div.card-head', h('h2', 'Delivery log')), table));
+  return h('div', email, paymentsCard, bankFeedCard, explainer, h('div.card', h('div.card-head', h('h2', 'Delivery log')), table));
 }

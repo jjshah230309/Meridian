@@ -400,6 +400,68 @@ export function createServer(config, db) {
   return server;
 }
 
+/**
+ * Housekeeping, the outbox drain, and the bank-feed sync -- previously
+ * written directly inside main(), so nothing but a manual run ever
+ * exercised them. Pulled out here so a test can call this once and await
+ * it, and so a caller that wants the timers off entirely (most tests) can
+ * just not call it, rather than needing a flag threaded through main().
+ */
+export function startBackgroundJobs(config, db) {
+  const housekeeping = setInterval(() => {
+    try {
+      auth.purgeExpiredSessions(db);
+      auth.purgeExpiredPortalSessions(db);
+      db.exec('PRAGMA wal_checkpoint(PASSIVE)');
+    } catch (e) { logger.error('housekeeping:', e.message); }
+  }, 3600_000);
+  housekeeping.unref();
+
+  // Drain the outbox: a webhook a workflow queued, or an email a statement,
+  // dunning notice or remittance advice queued. Every 30s rather than
+  // hourly, since a webhook waiting on this is closer to "the record just
+  // changed" than "once a day is fine".
+  //
+  // The payload shape every email-channel row carries: { to, subject, text,
+  // attachment: { filename, content_type, bytes_base64 } | null }. One
+  // attachment, because every caller of this (collections.mjs's statements
+  // and dunning notices, payruns.mjs's remittance advice) is one PDF plus a
+  // short note, never a multi-file mailing.
+  const sendQueuedEmail = async (queueDb, tenantId, payload) => {
+    const repo = new Repo(queueDb, tenantId);
+    const settings = setup.resolveEmailSettings(repo, config);
+    if (!settings) throw new Error('Email is not configured for this company');
+    const attachments = payload.attachment
+      ? [{ filename: payload.attachment.filename, contentType: payload.attachment.content_type, bytes: Buffer.from(payload.attachment.bytes_base64, 'base64') }]
+      : [];
+    await smtp.sendMail(settings, { from: settings.from, to: payload.to, subject: payload.subject, text: payload.text, attachments });
+  };
+  const draining = setInterval(() => {
+    outbox.drainOnce(db, { secret: config.secret, sendMail: sendQueuedEmail })
+      .catch((e) => logger.error('outbox drain:', e));
+  }, 30_000);
+  draining.unref();
+
+  // Every linked bank feed, across every tenant, every 6 hours -- a customer
+  // checking a statement is not the trigger for this, unlike the outbox;
+  // GoCardless's own free-tier rate limit (about 4 transaction calls per
+  // account per day) is what actually sets the cadence.
+  const bankFeedSync = setInterval(() => {
+    (async () => {
+      const bankfeeds = await import('./modules/bankfeeds.mjs');
+      for (const feed of bankfeeds.dueFeeds(db)) {
+        try {
+          const repo = new Repo(db, feed.tenant_id);
+          await bankfeeds.syncFeed(repo, config, feed.bank_account_id);
+        } catch (e) { logger.error(`bank feed sync (${feed.bank_account_id}):`, e.message); }
+      }
+    })().catch((e) => logger.error('bank feed sync:', e));
+  }, 6 * 3600_000);
+  bankFeedSync.unref();
+
+  return { stop: () => { clearInterval(housekeeping); clearInterval(draining); clearInterval(bankFeedSync); } };
+}
+
 // ---------------------------------------------------------------- main
 async function main() {
   const argv = process.argv.slice(2);
@@ -484,40 +546,7 @@ async function main() {
     else if (opened.how === 'browser') console.log('  No Chromium-based browser found, so this opened in your default browser.');
   }
 
-  // Housekeeping: expire sessions and checkpoint the WAL hourly.
-  const housekeeping = setInterval(() => {
-    try {
-      auth.purgeExpiredSessions(db);
-      auth.purgeExpiredPortalSessions(db);
-      db.exec('PRAGMA wal_checkpoint(PASSIVE)');
-    } catch (e) { console.error('housekeeping:', e.message); }
-  }, 3600_000);
-  housekeeping.unref();
-
-  // Drain the outbox: a webhook a workflow queued, or an email a statement,
-  // dunning notice or remittance advice queued. Every 30s rather than
-  // hourly, since a webhook waiting on this is closer to "the record just
-  // changed" than "once a day is fine".
-  //
-  // The payload shape every email-channel row carries: { to, subject, text,
-  // attachment: { filename, content_type, bytes_base64 } | null }. One
-  // attachment, because every caller of this (collections.mjs's statements
-  // and dunning notices, payruns.mjs's remittance advice) is one PDF plus a
-  // short note, never a multi-file mailing.
-  const sendQueuedEmail = async (queueDb, tenantId, payload) => {
-    const repo = new Repo(queueDb, tenantId);
-    const settings = setup.resolveEmailSettings(repo, config);
-    if (!settings) throw new Error('Email is not configured for this company');
-    const attachments = payload.attachment
-      ? [{ filename: payload.attachment.filename, contentType: payload.attachment.content_type, bytes: Buffer.from(payload.attachment.bytes_base64, 'base64') }]
-      : [];
-    await smtp.sendMail(settings, { from: settings.from, to: payload.to, subject: payload.subject, text: payload.text, attachments });
-  };
-  const draining = setInterval(() => {
-    outbox.drainOnce(db, { secret: config.secret, sendMail: sendQueuedEmail })
-      .catch((e) => logger.error('outbox drain:', e));
-  }, 30_000);
-  draining.unref();
+  startBackgroundJobs(config, db);
 
   let shuttingDown = false;
   const shutdown = (signal) => {

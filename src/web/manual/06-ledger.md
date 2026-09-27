@@ -155,6 +155,14 @@ that possible (`13/02/2026` can only be DMY); it asks you to choose when a
 file is genuinely ambiguous, such as every date falling in the first twelve
 days of the month.
 
+**Live feeds.** Connect a free GoCardless Bank Account Data account under
+Setup → Integrations, then **Connect live feed** on a bank account to
+authorise it through your own bank's site. Once linked, transactions are
+pulled in automatically every few hours (or on demand with **Sync now**) --
+the same matching and reconciliation as an imported statement, just without
+the upload. Only lines your bank has actually *booked* are pulled in; one
+still pending there is picked up on a later sync once it settles.
+
 ## Closing the books
 
 At the year end, **retained earnings roll-forward** closes income and expense

@@ -14,6 +14,52 @@ export async function bankView(route, { go }) {
   return overviewView(go);
 }
 
+/** Landed on after the hosted GoCardless consent flow (see api.mjs's
+ * /bank/:id/feed/connect for why this is a hash route, not a real path). */
+export async function bankFeedReturnView(route, { go }) {
+  const ref = route.query.ref;
+  if (!ref) return h('div.page', empty('Missing link', 'No requisition reference was returned.'));
+  try {
+    const feed = await API.completeBankFeedLink(ref);
+    if (feed.status === 'linked') { toast('Bank feed connected', { kind: 'success' }); }
+    else { toast(`Connection ${feed.status}. Try connecting again.`, { kind: 'warn' }); }
+    go(`/bank/${feed.bank_account_id}`);
+  } catch (e) { notifyError(e); go('/bank'); }
+  return h('div.page', loading('Finishing connection'));
+}
+
+async function connectFeedDialog(bankAccountId) {
+  const countrySel = h('select',
+    ...['gb', 'ie', 'de', 'fr', 'es', 'it', 'nl', 'be', 'pt', 'se'].map((c) => h('option', { value: c }, c.toUpperCase())));
+  const list = h('div', { style: { marginTop: '10px', maxHeight: '320px', overflowY: 'auto' } });
+
+  async function loadInstitutions() {
+    mount(list, loading('Loading banks'));
+    try {
+      const { institutions } = await API.bankFeedInstitutions(countrySel.value);
+      mount(list, ...institutions.map((i) => h('div.row.clickable', {
+        style: { padding: '8px 4px', borderBottom: '1px solid var(--border)', gap: '8px', alignItems: 'center' },
+        onclick: async () => {
+          try {
+            const { link } = await API.connectBankFeed(bankAccountId, i.id);
+            window.location.href = link;
+          } catch (e) { notifyError(e); }
+        },
+      }, i.logo ? h('img', { src: i.logo, style: { width: '24px', height: '24px' } }) : null, h('span', i.name))));
+    } catch (e) { mount(list, h('div.err', e.message)); }
+  }
+  countrySel.addEventListener('change', loadInstitutions);
+
+  modal({
+    title: 'Connect a live bank feed', size: 'narrow',
+    body: h('div',
+      h('div.muted', { style: { fontSize: '12.5px', marginBottom: '10px' } }, 'Choose your bank. You will be taken to your bank\'s own site to authorise access, then brought back here.'),
+      h('div.field', h('label', 'Country'), countrySel), list),
+    actions: [{ label: 'Close', value: null }],
+  });
+  loadInstitutions();
+}
+
 // ------------------------------------------------------------- overview
 async function overviewView(go) {
   const { accounts, position } = await API.bankAccounts();
@@ -70,6 +116,41 @@ async function accountView(id, go) {
   if (!account) return h('div.page', empty('Bank account not found', ''));
 
   const host = h('div');
+  const feedHost = h('div', { style: { marginBottom: '14px' } });
+
+  async function loadFeed() {
+    const { feeds } = await API.bankFeeds();
+    const feed = feeds.find((f) => f.bank_account_id === id);
+    const STATUS_TAG = { linked: 'green', pending: 'amber', error: '', expired: '' };
+    mount(feedHost, h('div.card',
+      h('div.card-head', h('h2', 'Live feed'),
+        feed ? h('span.tag', { class: STATUS_TAG[feed.status] }, fmt.titleCase(feed.status)) : null,
+        h('div.actions',
+          !feed && store.can('bank_account', store.LEVEL.EDIT) ? h('button.btn.sm', { onclick: () => connectFeedDialog(id) }, 'Connect live feed') : null,
+          feed?.status === 'linked' ? h('button.btn.sm', {
+            onclick: async () => {
+              try { const r = await API.syncBankFeed(id); toast(`${r.imported} new line${r.imported === 1 ? '' : 's'}${r.skipped ? `, ${r.skipped} already had` : ''}`, { kind: 'success' }); load(); }
+              catch (e) { notifyError(e); }
+            },
+          }, 'Sync now') : null,
+          feed && ['expired', 'error'].includes(feed.status) && store.can('bank_account', store.LEVEL.EDIT)
+            ? h('button.btn.sm', { onclick: () => connectFeedDialog(id) }, 'Reconnect') : null,
+          feed ? h('button.btn.sm.ghost', {
+            onclick: async () => {
+              const ok = await confirm({ title: 'Disconnect this feed?', message: 'Statement import will go back to manual (CSV/OFX/QFX/BAI2/CAMT.053) upload.' });
+              if (!ok) return;
+              try { await API.disconnectBankFeed(id); toast('Disconnected', { kind: 'success' }); loadFeed(); } catch (e) { notifyError(e); }
+            },
+          }, 'Disconnect') : null)),
+      h('div.card-body',
+        feed
+          ? facts([
+            ['Institution', feed.institution_name || feed.institution_id],
+            ['Last synced', feed.last_synced_at ? fmt.dateTime(feed.last_synced_at) : 'Never'],
+            feed.last_error ? ['Last error', h('span.err', feed.last_error)] : null,
+          ].filter(Boolean))
+          : h('div.muted', { style: { fontSize: '12.5px' } }, 'Not connected. Statements are imported by hand, below.'))));
+  }
 
   async function load() {
     mount(host, loading());
@@ -149,7 +230,7 @@ async function accountView(id, go) {
     });
   }
 
-  await load();
+  await Promise.all([load(), loadFeed()]);
 
   return h('div.page',
     h('div.page-head',
@@ -159,7 +240,7 @@ async function accountView(id, go) {
         h('div.page-sub', `${account.bank_name || 'Bank'} · ${account.currency} · ledger balance ${fmt.money(account.gl_balance, account.currency)}`)),
       h('div.page-actions',
         h('button.btn', { onclick: () => go(`/account/${account.account_id}`) }, 'GL ledger'))),
-    host);
+    feedHost, host);
 }
 
 function importDialog(bankAccountId, onDone) {

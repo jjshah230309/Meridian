@@ -72,6 +72,7 @@ export const TENANT_TABLES = new Set([
   'attachment',
   'portal_user',
   'payment_intent',
+  'bank_feed',
 ]);
 
 /**

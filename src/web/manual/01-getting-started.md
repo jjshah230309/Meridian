@@ -4,8 +4,9 @@ Meridian is a complete business system — accounting, sales, purchasing, stock,
 manufacturing, projects, people and reporting — that runs on hardware you own.
 There is no cloud account and no subscription, and it makes no outbound
 connection unless you set one up yourself — outgoing email, Stripe for online
-payments (both under Setup → Integrations), or a workflow's webhook. Your
-company file is a single database file on a disk you control.
+payments, GoCardless for live bank feeds (all under Setup → Integrations), or
+a workflow's webhook. Your company file is a single database file on a disk
+you control.
 
 This chapter gets you from a fresh copy to a working company.
 

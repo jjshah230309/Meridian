@@ -22,6 +22,7 @@ export const routes = [
   { match: (r) => r.path === '/inventory', render: lazy('./inventory.js', 'inventoryView') },
   { match: (r) => r.parts[0] === 'hr', render: lazy('./hr.js', 'hrView') },
   { match: (r) => r.parts[0] === 'bank', render: lazy('./bank.js', 'bankView') },
+  { match: (r) => r.path === '/bank-feed-return', render: lazy('./bank.js', 'bankFeedReturnView') },
   { match: (r) => r.parts[0] === 'setup', render: lazy('./setup.js', 'setupView') },
   { match: (r) => r.parts[0] === 'flow', render: lazy('./flowdesigner.js', 'flowDesignerView') },
   { match: (r) => r.parts[0] === 'data', render: lazy('./data.js', 'dataView') },

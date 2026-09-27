@@ -25,6 +25,7 @@ import * as hr from './modules/hr.mjs';
 import * as reports from './modules/reports.mjs';
 import * as platform from './modules/platform.mjs';
 import * as bank from './modules/bank.mjs';
+import * as bankfeeds from './modules/bankfeeds.mjs';
 import * as setup from './modules/setup.mjs';
 import * as projects from './modules/projects.mjs';
 import * as schedules from './modules/schedules.mjs';
@@ -1024,6 +1025,54 @@ export function buildApi({ config }) {
     return ctx.tx(() => bank.setReconciled(ctx.repo, ctx.params.id, rowList(ctx.body?.ids, 'ids')));
   });
   r.post(`${P}/bank/reconciliations/:id/complete`, async (ctx) => { rbac.require$(ctx.access, 'reconciliation', LEVEL.FULL); return ctx.tx(() => bank.completeReconciliation(ctx.repo, ctx.params.id, { force: bool(ctx.body?.force) })); });
+
+  // ------------------------------------------------------------ bank feeds
+  r.get(`${P}/setup/bank-feed-settings`, async (ctx) => {
+    rbac.require$(ctx.access, 'setup', LEVEL.VIEW);
+    return bankfeeds.getFeedSettings(ctx.repo);
+  });
+  r.put(`${P}/setup/bank-feed-settings`, async (ctx) => {
+    if (!ctx.user?.is_owner) throw forbidden('Only the account owner can change bank feed credentials.');
+    return ctx.tx(() => bankfeeds.setFeedSettings(ctx.repo, config, ctx.body || {}));
+  });
+  r.post(`${P}/setup/bank-feed-settings/test`, async (ctx) => {
+    if (!ctx.user?.is_owner) throw forbidden('Only the account owner can test the connection.');
+    return bankfeeds.testConnection(ctx.body?.secret_id, ctx.body?.secret_key);
+  });
+
+  r.get(`${P}/bank/feeds/institutions`, async (ctx) => {
+    rbac.require$(ctx.access, 'bank_account', LEVEL.EDIT);
+    return { institutions: await bankfeeds.listInstitutions(ctx.repo, config, ctx.query.country) };
+  });
+  r.post(`${P}/bank/:id/feed/connect`, async (ctx) => {
+    rbac.require$(ctx.access, 'bank_account', LEVEL.EDIT);
+    if (!ctx.body?.institution_id) throw badRequest('An institution is required.');
+    // The staff app is hash-routed (app.js's router reads location.hash, not
+    // location.pathname), so the redirect has to land inside the fragment --
+    // GoCardless appends `?ref=<id>` to whatever URL is given here, and a
+    // `?` after a `#` is just more fragment, which is exactly what
+    // parseRoute() already knows how to split back into a path and query.
+    const redirectUrl = `${ctx.req.headers['x-forwarded-proto'] || 'http'}://${ctx.req.headers.host}/#/bank-feed-return`;
+    // Not ctx.tx(): every one of these three awaits GoCardless, and
+    // transaction() refuses an async callback outright (see payments'
+    // createCheckout for the same reason) -- each does its own atomic
+    // write once the outbound call returns.
+    return bankfeeds.startLink(ctx.repo, config, { bankAccountId: ctx.params.id, institutionId: ctx.body.institution_id, redirectUrl });
+  });
+  r.post(`${P}/bank/feeds/complete`, async (ctx) => {
+    rbac.require$(ctx.access, 'bank_account', LEVEL.EDIT);
+    if (!ctx.body?.requisition_id) throw badRequest('A requisition id is required.');
+    return bankfeeds.completeLink(ctx.repo, config, ctx.body.requisition_id);
+  });
+  r.post(`${P}/bank/:id/feed/sync`, async (ctx) => {
+    rbac.require$(ctx.access, 'bank_txn', LEVEL.CREATE);
+    return bankfeeds.syncFeed(ctx.repo, config, ctx.params.id);
+  });
+  r.post(`${P}/bank/:id/feed/disconnect`, async (ctx) => {
+    rbac.require$(ctx.access, 'bank_account', LEVEL.FULL);
+    return ctx.tx(() => bankfeeds.disconnect(ctx.repo, ctx.params.id));
+  });
+  r.get(`${P}/bank/feeds`, async (ctx) => { rbac.require$(ctx.access, 'bank_account', LEVEL.VIEW); return { feeds: bankfeeds.listFeeds(ctx.repo) }; });
 
   // ------------------------------------------------------------- platform
   r.post(`${P}/search`, async (ctx) => {
