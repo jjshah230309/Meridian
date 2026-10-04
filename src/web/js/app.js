@@ -745,6 +745,9 @@ window.addEventListener('meridian:zoom-native', (e) => {
   store.setPref('ui.zoom', e.detail?.level ?? 1);
 });
 (async () => {
+  // Only a non-English pick costs a fetch here -- English needs no dictionary
+  // at all, so the common case reaches the session check with no extra wait.
+  await store.loadLanguage(store.getPref('ui.lang', 'en'));
   try {
     const s = await API.session();
     setCsrf(s.csrf);

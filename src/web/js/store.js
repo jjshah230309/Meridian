@@ -4,12 +4,19 @@
 // a form does not fan out into a dozen requests.
 import { API } from './api.js';
 import * as fmt from './format.js';
+import * as i18n from './i18n.js';
 
 export const state = {
   user: null, tenant: null, permissions: {}, roles: [], restrictions: {},
   meta: null, savedSearches: [], notifications: [], unread: 0,
   subsidiary: null, theme: 'light', palette: 'obsidian', typeface: 'styrene', look: 'glass',
+  language: 'en',
 };
+
+// A locale Intl actually recognises for each shipped/downloadable language --
+// the language code alone (`ar`, `fr`) works too, but the region-qualified
+// form is what most of this app's own examples and the demo data assume.
+const INTL_LOCALE = { en: 'en-US', ar: 'ar', fr: 'fr-FR', es: 'es-ES', de: 'de-DE' };
 
 const refCache = new Map();
 const refPromises = new Map();
@@ -251,15 +258,61 @@ export function setTypeface(id) {
   return value;
 }
 
+/** Just the <html lang dir> attributes -- synchronous, so RTL is correct
+ * from the very first paint even before the dictionary itself has loaded. */
+function setLanguageAttrs(code) {
+  const info = i18n.languageInfo(code);
+  state.language = info.code;
+  document.documentElement.setAttribute('lang', info.code);
+  document.documentElement.setAttribute('dir', info.dir);
+}
+
+/**
+ * Load (or reload) a language's dictionary. English needs no fetch at all --
+ * it is the untranslated case i18n.t() already falls back to. Arabic ships
+ * with the app at /locales/ar.json; French/Spanish/German are downloaded
+ * (langpacks.mjs) into the same place once installed, so this fetch does
+ * not need to know which kind a given code is.
+ */
+export async function loadLanguage(code) {
+  setLanguageAttrs(code);
+  let dict = {};
+  if (code !== 'en') {
+    try {
+      const res = await fetch(`/locales/${code}.json`);
+      if (!res.ok) throw new Error('pack unavailable');
+      dict = await res.json();
+    } catch {
+      // A missing or corrupt pack falls back to English rather than a page
+      // full of raw English text pretending to be broken translations.
+      setLanguageAttrs('en');
+    }
+  }
+  i18n.setLanguage(state.language, dict);
+  fmt.configure({ locale: INTL_LOCALE[state.language] || state.language });
+}
+
+/** Changing language re-renders every string on the page; reloading is the
+ * simplest way to guarantee that, the same as a look/palette pick does not
+ * need (those are pure CSS) but a translated string genuinely does. */
+export async function setLanguage(code) {
+  syncPref('ui.lang', code);
+  window.location.reload();
+}
+
 /**
  * Palette, theme, typeface, density and zoom are all read before the first
  * paint, so the application never flashes one appearance and settles on
- * another.
+ * another. Language's own dictionary is loaded separately (it needs a
+ * fetch for anything but English) -- see boot()'s own await of it in
+ * app.js, this only sets the attributes so RTL layout is correct from the
+ * first frame.
  */
 export function initAppearance() {
   setLook(getPref('ui.look', 'glass'));
   setPalette(getPref('ui.palette', 'obsidian'));
   setTypeface(getPref('ui.typeface', 'styrene'));
+  setLanguageAttrs(getPref('ui.lang', 'en'));
   initTheme();
   setDensity(getPref('ui.density', 'comfortable'));
   const zoom = Number(getPref('ui.zoom', 1)) || 1;

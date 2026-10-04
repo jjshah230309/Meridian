@@ -5,6 +5,7 @@ import { h, mount, clear, $, safeSnippet } from './dom.js';
 import { icon } from './icons.js';
 import * as fmt from './format.js';
 import { refOptions, metaFor, state } from './store.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------- toast
 let toastHost = null;
@@ -14,16 +15,16 @@ export function toast(message, { kind = 'info', title = null, timeout = 5000 } =
     h('div', { style: { minWidth: 0 } },
       title && h('div.t', title),
       h('div.m', message)),
-    h('button.x', { onclick: () => el.remove(), title: 'Dismiss', 'aria-label': 'Dismiss' }, '✕'));
+    h('button.x', { onclick: () => el.remove(), title: t('Dismiss'), 'aria-label': t('Dismiss') }, '✕'));
   toastHost.appendChild(el);
   if (timeout) setTimeout(() => el.remove(), timeout);
   return el;
 }
 export const notifyError = (e) => toast(e?.message || String(e), { kind: 'error', title: errTitle(e), timeout: 9000 });
 const errTitle = (e) => ({
-  VALIDATION_FAILED: 'Check the highlighted fields', FORBIDDEN: 'Not permitted',
-  UNPROCESSABLE: 'Cannot complete that', CONFLICT: 'Conflict', RATE_LIMITED: 'Slow down',
-}[e?.code] || 'Something went wrong');
+  VALIDATION_FAILED: t('Check the highlighted fields'), FORBIDDEN: t('Not permitted'),
+  UNPROCESSABLE: t('Cannot complete that'), CONFLICT: t('Conflict'), RATE_LIMITED: t('Slow down'),
+}[e?.code] || t('Something went wrong'));
 export const notifyOk = (m, title) => toast(m, { kind: 'success', title });
 
 // ----------------------------------------------------------------- menu
@@ -125,7 +126,7 @@ export function modal({ title, body, actions = [], size = '', onClose = null, fo
   const box = h('div.modal', { class: size },
     h('div.modal-head',
       h('h2', title),
-      h('button.icon-btn', { onclick: () => close(null), title: 'Close', 'aria-label': 'Close' }, '✕')),
+      h('button.icon-btn', { onclick: () => close(null), title: t('Close'), 'aria-label': t('Close') }, '✕')),
     h('div.modal-body', body),
     (actions.length || footLeft) && h('div.modal-foot',
       footLeft && h('div.left', footLeft),
@@ -139,7 +140,7 @@ export function modal({ title, body, actions = [], size = '', onClose = null, fo
           if (a.close !== false && !a.onClick) return close(a.value);
           btn.disabled = true;
           const prev = btn.textContent;
-          btn.textContent = 'Working…';
+          btn.textContent = t('Working…');
           try { const r = await a.onClick(close); if (a.close !== false && r !== false) close(r); }
           catch (e) { notifyError(e); }
           finally { btn.disabled = false; btn.textContent = prev; }
@@ -153,14 +154,14 @@ export function modal({ title, body, actions = [], size = '', onClose = null, fo
   return { close, box, overlay };
 }
 
-export function confirm({ title = 'Are you sure?', message, confirmLabel = 'Confirm', danger = false, detail = null }) {
+export function confirm({ title = t('Are you sure?'), message, confirmLabel = t('Confirm'), danger = false, detail = null }) {
   return new Promise((resolve) => {
     let settled = false;
     modal({
       title, size: 'narrow',
       body: h('div', h('div', message), detail && h('div.muted', { style: { marginTop: 'var(--s2)', fontSize: 'var(--t-sm)' } }, detail)),
       actions: [
-        { label: 'Cancel', value: false },
+        { label: t('Cancel'), value: false },
         { label: confirmLabel, kind: danger ? 'danger' : 'primary', onClick: () => { settled = true; resolve(true); } },
       ],
       onClose: () => { if (!settled) resolve(false); },
@@ -169,7 +170,7 @@ export function confirm({ title = 'Are you sure?', message, confirmLabel = 'Conf
 }
 
 /** Modal that collects values from a field list and resolves with them. */
-export function formModal({ title, fields, values = {}, submitLabel = 'Save', size = '', onSubmit }) {
+export function formModal({ title, fields, values = {}, submitLabel = t('Save'), size = '', onSubmit }) {
   const model = { ...values };
   const host = h('div.form-grid');
   const controls = {};
@@ -181,7 +182,7 @@ export function formModal({ title, fields, values = {}, submitLabel = 'Save', si
   const m = modal({
     title, body: host, size,
     actions: [
-      { label: 'Cancel', value: null },
+      { label: t('Cancel'), value: null },
       {
         label: submitLabel, kind: 'primary',
         onClick: async (close) => {
@@ -190,7 +191,7 @@ export function formModal({ title, fields, values = {}, submitLabel = 'Save', si
           catch (e) {
             if (e.fields) {
               for (const [k, msg] of Object.entries(e.fields)) controls[k]?.setError(msg);
-              toast(e.message, { kind: 'error', title: 'Check the highlighted fields' });
+              toast(e.message, { kind: 'error', title: t('Check the highlighted fields') });
             } else notifyError(e);
             return false;
           }

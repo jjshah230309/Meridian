@@ -16,7 +16,11 @@ export const getBaseCurrency = () => baseCurrency;
 
 const nfCache = new Map();
 function nf(currency, opts) {
-  const key = `${currency}|${JSON.stringify(opts)}`;
+  // Keyed on locale too -- switching language used to leave every already-
+  // cached formatter behind, so a page opened in English before a language
+  // change kept rendering numbers the English way even after configure()
+  // changed `locale` underneath it.
+  const key = `${locale}|${currency}|${JSON.stringify(opts)}`;
   let f = nfCache.get(key);
   if (!f) {
     try { f = new Intl.NumberFormat(locale, { style: 'currency', currency, ...opts }); }
